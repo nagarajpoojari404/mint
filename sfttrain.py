@@ -17,7 +17,7 @@ from mint.data.datasets.spellingbee import SimpleSpelling, SpellingBee
 from mint.data.dist.sft import DistributedSFTDataloader
 from mint.nn.models import Gemma, GemmaConfig, configure_optimizer
 from mint.optim.muon_adamw import MuonAdamWConfig
-from mint.tokenizer import Tokenizer
+from mint.tokenizer import TikTokenizer
 from mint.trainer.sft import SFTConfig, SFTTrainer
 from mint.utils.device import Device, DeviceConfig
 from mint.utils.logger import logger
@@ -77,7 +77,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    tokenizer = Tokenizer()
+    tokenizer = TikTokenizer()
     config = MetaConfig.from_toml(toml_path=args.config)
 
     # Validate vocab size matches tokenizer

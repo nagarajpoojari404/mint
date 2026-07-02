@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Config for sft_v2.py  — SFT on HuggingFace models with custom datasets
+#
+# Usage (LoRA on by default):
+#   python sft_v2.py \
+#     --config configs/config_hf_sft.toml \
+#     --model-name Qwen/Qwen2-0.5B \
+#     --datasets gsm8k smoltalk arc 2*path/to/custom.jsonl
+#
+# Disable LoRA (full fine-tune):
+#   python sft_v2.py --config configs/config_hf_sft.toml --no-lora
+#
+# Custom LoRA targets / rank:
+#   python sft_v2.py ... --lora-r 8 --lora-alpha 16 --lora-targets q_proj v_proj k_proj
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+[train]
+mixed_precision          = true
+use_meta_device          = false   # HF models are loaded directly, not on meta device
+compile_model            = false   # set true to torch.compile (requires PyTorch ≥ 2.0)
+gradient_checkpointing   = false   # set true to save VRAM at the cost of ~20 % speed
+
+train_num_steps          = 1000
+grad_clip                = 1.0
+gradient_accumulation_steps = 4   # effective batch = batch_size * grad_accum
+
+log_every_n_steps        = 1
+eval_every_n_steps       = 10
+eval_num_steps           = 10
+core_eval_every_n_step   = 500
+
+# ── Logging (W&B) ─────────────────────────────────────────────────────────────
+[train.lg]
+wandb_enabled   = false
+wandb_project   = "goda-sft"
+wandb_run_name  = ""
+wandb_entity    = ""
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+[train.ckpt]
+checkpoint_dir                  = "checkpoints/hf_sft"
+save_checkpoint_every_n_steps   = 200
+keep_last_n_checkpoints         = 2
+resume_from_checkpoint          = false
+load_best_checkpoint            = false
+
+# ── Learning-rate schedule ────────────────────────────────────────────────────
+# matrix_lr    → AdamW lr applied to LoRA parameters (or all params with --no-lora)
+# weight_decay → AdamW weight decay
+# With LoRA a higher lr (1e-4 – 3e-4) is common; lower (1e-5 – 5e-5) for full SFT.
+[train.sched]
+matrix_lr              = 1.0e-4   # AdamW lr for LoRA params (increase for full fine-tune)
+unembedding_lr         = 4.0e-5
+embedding_lr           = 2.0e-4
+scalar_lr              = 5.0e-3
+scalar_lr_multiplier   = 0.01
+
+warmup_steps               = 50
+muon_momentum_warmup_steps = 400
+muon_momentum_start        = 0.85
+muon_momentum_peak         = 0.97
+muon_momentum_final        = 0.90
+warmdown_ratio             = 0.2
+final_lr_frac              = 0.1
+
+weight_decay            = 0.01   # AdamW weight decay
+weight_decay_lm_head    = 0.01
+weight_decay_embedding  = 0.001
+weight_decay_scalar     = 0.05
+
+# ── Muon / AdamW optimiser hyperparameters ────────────────────────────────────
+# Kept for config-parsing compatibility; AdamW lr/wd come from train.sched above.
+[optim]
+muon_momentum              = 0.95
+muon_beta2                 = 0.90
+muon_ns_steps              = 5
+adamw_beta1                = 0.90
+adamw_beta2_lm_head        = 0.96
+adamw_beta2_embedding      = 0.995
+adamw_beta2_scalar         = 0.95
+adamw_eps                  = 1.0e-8
+
+# ── Device ────────────────────────────────────────────────────────────────────
+[device]
+mixed_precision = false   # controls GradScaler; set true only on CUDA with bfloat16
+
+# ── Dataloader ────────────────────────────────────────────────────────────────
+[dl]
+data_dir            = "data/sft"   # only used as a base path; datasets are loaded by name
+batch_size          = 4            # per-device batch size
+buffer_size         = 1000
+tokenizer_batch_size = 128
+seq_length          = 512          # max tokens per sequence
