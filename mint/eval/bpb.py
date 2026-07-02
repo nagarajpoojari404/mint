@@ -37,15 +37,15 @@ class BPBEvaluator(Evaluator):
                 with self.device.autocast():
                     logits = self.model(inputs)
                     loss = nn.functional.cross_entropy(
-                        logits.view(-1, logits.size(-1)),
-                        targets.view(-1),
-                        reduction='none'
+                        logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
                     )
                     # Apply loss mask to ignore padding tokens
                     masked_loss = loss * loss_mask.view(-1)
                     # Sum the masked loss and divide by number of valid tokens
                     valid_tokens = loss_mask.sum()
-                    batch_loss = masked_loss.sum() / valid_tokens if valid_tokens > 0 else masked_loss.sum()
+                    batch_loss = (
+                        masked_loss.sum() / valid_tokens if valid_tokens > 0 else masked_loss.sum()
+                    )
 
                 total_loss += batch_loss.item()
                 total_tokens += valid_tokens.item()

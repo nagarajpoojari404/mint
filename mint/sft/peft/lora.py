@@ -35,8 +35,9 @@ class LoRA(Adapter):
     def __init__(self) -> None:
         super().__init__()
 
+    @classmethod
     def apply(
-        self,
+        cls,
         model: nn.Module,
         target_modules: list[str] | None = None,
         r: int = 8,

@@ -202,3 +202,21 @@ class SFTTrainer(BaseTrainer):
 
         final_step = micro_step // self.config.gradient_accumulation_steps
         self._finalize_training(final_step, self.checkpointer)
+
+
+class HFSFTTrainer(SFTTrainer):
+    def _forward_pass(
+        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        output = self.model(input_ids=inputs)
+        return output.logits if hasattr(output, "logits") else output
+
+    def _ensure_initial_lr(self) -> None:
+        """Seed initial_lr on every param group if not already set."""
+        for group in self.optimizer.param_groups:
+            if "initial_lr" not in group:
+                group["initial_lr"] = group["lr"]
+
+    def train(self) -> None:
+        self._ensure_initial_lr()
+        super().train()
