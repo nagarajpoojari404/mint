@@ -11,7 +11,7 @@ from mint.config.base import Config
 from mint.data.dataloader import DistributedDataloader
 from mint.eval.base import EvalConfig
 from mint.trainer.scheduler import SchedulerConfig
-from mint.utils.checkpointer import CheckpointerConfig
+from mint.utils.checkpointer import Checkpointer, CheckpointerConfig
 from mint.utils.device import Device
 from mint.utils.logger import LoggerConfig, logger
 
@@ -123,7 +123,7 @@ class BaseTrainer:
             return loss / self.config.gradient_accumulation_steps
 
     def _perform_optimization_step(
-        self, micro_step: int, step: int, scheduler_metrics: dict | None = None
+        self, _micro_step: int, step: int, scheduler_metrics: dict | None = None
     ) -> dict:
         if scheduler_metrics is None:
             if not hasattr(self, "scheduler"):
@@ -190,7 +190,7 @@ class BaseTrainer:
     def _maybe_save_checkpoint(
         self,
         step: int,
-        checkpointer: Any,
+        checkpointer: Checkpointer,
         *,
         force: bool = False,
     ) -> None:

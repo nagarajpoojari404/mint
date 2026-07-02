@@ -174,7 +174,7 @@ class PreTrainer(BaseTrainer):
         self.model.train()
         train_start_time = time.perf_counter()
         accumulated_loss = 0.0
-        
+
         # Calculate starting micro_step from start_step
         micro_step = self.start_step * self.config.gradient_accumulation_steps
 
@@ -187,7 +187,7 @@ class PreTrainer(BaseTrainer):
         for inputs, targets, loss_mask, doc_ids in batch_iterator:
             # Calculate current step for interrupt check (before increment)
             step = micro_step // self.config.gradient_accumulation_steps
-            
+
             if (
                 self._handle_interrupt(step, self.checkpointer)
                 or step >= self.config.train_num_steps
@@ -204,7 +204,7 @@ class PreTrainer(BaseTrainer):
 
             self.device.backward(loss)
             accumulated_loss += loss.item()
-            micro_step += 1  # noqa: SIM113
+            micro_step += 1
 
             if not is_accumulating:
                 # Calculate step after completing gradient accumulation

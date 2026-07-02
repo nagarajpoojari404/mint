@@ -1,8 +1,8 @@
+import textwrap
 import time
 from dataclasses import dataclass
 from typing import Any
-        
-import textwrap
+
 import torch
 from torch import nn
 from torch.optim import Optimizer
@@ -55,14 +55,14 @@ class DPOTrainer(BaseTrainer):
 
         # Initialize scheduler only if config has sched attribute
         self.scheduler = None
-        if hasattr(config, 'sched') and config.sched is not None:
+        if hasattr(config, "sched") and config.sched is not None:
             self.scheduler = Scheduler(
                 num_iterations=config.train_num_steps,
                 config=config.sched,
             )
             # Set initial_lr in optimizer param groups for scheduler
             for group in optimizer.param_groups:
-                group['initial_lr'] = group['lr']
+                group["initial_lr"] = group["lr"]
 
         self.criterion = DPOLoss()
 
@@ -133,41 +133,47 @@ class DPOTrainer(BaseTrainer):
         for i, sample in enumerate(samples, 1):
             with torch.no_grad():
                 chosen_tensor = sample["chosen_tokens"].unsqueeze(0).to(self.device.device)
-                
-                policy_output = self.policy_model(chosen_tensor)
-                policy_logits = policy_output.logits if hasattr(policy_output, 'logits') else policy_output
-                policy_pred_tokens = policy_logits.argmax(dim=-1).squeeze(0)
-                policy_pred_str = self.tokenizer.decode(policy_pred_tokens.unsqueeze(0), skip_special_tokens=True)[0]
-                
-                ref_output = self.reference_model(chosen_tensor)
-                ref_logits = ref_output.logits if hasattr(ref_output, 'logits') else ref_output
-                ref_pred_tokens = ref_logits.argmax(dim=-1).squeeze(0)
-                ref_pred_str = self.tokenizer.decode(ref_pred_tokens.unsqueeze(0), skip_special_tokens=True)[0]
 
-            logger.debug(f"\n{'='*80}")
+                policy_output = self.policy_model(chosen_tensor)
+                policy_logits = (
+                    policy_output.logits if hasattr(policy_output, "logits") else policy_output
+                )
+                policy_pred_tokens = policy_logits.argmax(dim=-1).squeeze(0)
+                policy_pred_str = self.tokenizer.decode(
+                    policy_pred_tokens.unsqueeze(0), skip_special_tokens=True
+                )[0]
+
+                ref_output = self.reference_model(chosen_tensor)
+                ref_logits = ref_output.logits if hasattr(ref_output, "logits") else ref_output
+                ref_pred_tokens = ref_logits.argmax(dim=-1).squeeze(0)
+                ref_pred_str = self.tokenizer.decode(
+                    ref_pred_tokens.unsqueeze(0), skip_special_tokens=True
+                )[0]
+
+            logger.debug(f"\n{'=' * 80}")
             logger.debug(f"DPO Sample {i} (Step {step}):")
-            logger.debug(f"{'-'*80}")
-            
+            logger.debug(f"{'-' * 80}")
+
             logger.debug("CHOSEN:")
-            for line in textwrap.wrap(sample['chosen_str'], width=76):
+            for line in textwrap.wrap(sample["chosen_str"], width=76):
                 logger.debug(f"  {line}")
-            
-            logger.debug(f"\n{'-'*80}")
+
+            logger.debug(f"\n{'-' * 80}")
             logger.debug("REJECTED:")
-            for line in textwrap.wrap(sample['rejected_str'], width=76):
+            for line in textwrap.wrap(sample["rejected_str"], width=76):
                 logger.debug(f"  {line}")
-            
-            logger.debug(f"\n{'-'*80}")
+
+            logger.debug(f"\n{'-' * 80}")
             logger.debug("POLICY MODEL PREDICTION:")
             for line in textwrap.wrap(policy_pred_str, width=76):
                 logger.debug(f"  {line}")
-            
-            logger.debug(f"\n{'-'*80}")
+
+            logger.debug(f"\n{'-' * 80}")
             logger.debug("REFERENCE MODEL PREDICTION:")
             for line in textwrap.wrap(ref_pred_str, width=76):
                 logger.debug(f"  {line}")
-            
-            logger.debug(f"{'='*80}\n")
+
+            logger.debug(f"{'=' * 80}\n")
 
     def _compute_loss(
         self,
@@ -178,7 +184,9 @@ class DPOTrainer(BaseTrainer):
     ) -> torch.Tensor:
         policy_outputs = self.policy_model(concat_ids)
         # Extract logits from the model output (HuggingFace models return CausalLMOutputWithPast)
-        policy_logits = policy_outputs.logits if hasattr(policy_outputs, 'logits') else policy_outputs
+        policy_logits = (
+            policy_outputs.logits if hasattr(policy_outputs, "logits") else policy_outputs
+        )
 
         # split back into chosen and rejected chunks
         p_chosen_logits, p_rejected_logits = policy_logits.chunk(2, dim=0)
@@ -190,7 +198,7 @@ class DPOTrainer(BaseTrainer):
         with torch.no_grad():
             ref_outputs = self.reference_model(concat_ids)
             # Extract logits from the model output
-            ref_logits = ref_outputs.logits if hasattr(ref_outputs, 'logits') else ref_outputs
+            ref_logits = ref_outputs.logits if hasattr(ref_outputs, "logits") else ref_outputs
 
             r_chosen_logits, r_rejected_logits = ref_logits.chunk(2, dim=0)
 
@@ -258,7 +266,7 @@ class DPOTrainer(BaseTrainer):
                 scheduler_metrics = {}
                 if self.scheduler is not None:
                     scheduler_metrics = self.scheduler.step(self.optimizer, step)
-                
+
                 self._perform_optimization_step(micro_step, step, scheduler_metrics)
 
                 step_time = time.perf_counter() - step_start_time

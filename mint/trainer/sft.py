@@ -150,7 +150,7 @@ class SFTTrainer(BaseTrainer):
 
         for inputs, targets, loss_mask, _ in batch_iterator:
             step = micro_step // self.config.gradient_accumulation_steps
-            
+
             # Handle interrupt
             if (
                 self._handle_interrupt(step, self.checkpointer)
@@ -168,11 +168,11 @@ class SFTTrainer(BaseTrainer):
 
             self.device.backward(loss)
             accumulated_loss += loss.item()
-            micro_step += 1  # noqa: SIM113
+            micro_step += 1
 
             if not is_accumulating:
                 step = micro_step // self.config.gradient_accumulation_steps
-                
+
                 scheduler_metrics = self.scheduler.step(self.optimizer, step)
                 self._perform_optimization_step(micro_step, step, scheduler_metrics)
 
