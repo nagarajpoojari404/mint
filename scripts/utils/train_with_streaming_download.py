@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mint.utils.logger import logger
-from scripts.async_download_climbmix import (
+from scripts.utils.async_download_climbmix import (
     DownloadCoordinator,
     download_process,
     wait_for_training_ready,
