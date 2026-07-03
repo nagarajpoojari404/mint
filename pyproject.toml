@@ -24,8 +24,11 @@ dependencies = [
 ]
 
 
+[project.scripts]
+mint = "mint.main:app"
+
 [tool.hatch.build.targets.wheel]
-packages = ["goda"]
+packages = ["mint", "scripts"]
 
 [tool.ruff]
 line-length = 100
