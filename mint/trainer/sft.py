@@ -60,8 +60,8 @@ class SFTTrainer(BaseTrainer):
                 datasets=eval_datasets,
             )
 
-            if config.ckpt.resume_from_checkpoint:
-                self._load_pretrained_checkpoint()
+        if config.ckpt.resume_from_checkpoint:
+            self._load_pretrained_checkpoint()
 
     def _load_pretrained_checkpoint(self) -> None:
         checkpoint_info = self.checkpointer.load_checkpoint(
