@@ -8,6 +8,7 @@ from torch.optim import Optimizer
 
 from mint.data.dist.sft import DistributedSFTDataloader
 from mint.eval.dist.chatcore import ChatCoreEvaluator
+from mint.nn.base import LogitsWrapper
 from mint.trainer.base import BasetrainConfig, BaseTrainer
 from mint.trainer.scheduler import Scheduler
 from mint.utils.checkpointer import Checkpointer
@@ -192,7 +193,7 @@ class SFTTrainer(BaseTrainer):
                 )
 
                 if step % self.config.eval_every_n_steps == 0 and step > 0:
-                    self._run_evaluation(step=step, num_examples=100)
+                    self._run_evaluation(step=step, num_examples=self.config.eval_num_steps)
                     self._log_sample_predictions(step)
 
                 self._maybe_save_checkpoint(step, self.checkpointer)
@@ -205,11 +206,30 @@ class SFTTrainer(BaseTrainer):
 
 
 class HFSFTTrainer(SFTTrainer):
+    def __init__(
+        self,
+        model: nn.Module,
+        optimizer: Optimizer,
+        dataloader: DistributedSFTDataloader,
+        device: Device,
+        config: SFTConfig,
+        tokenizer: Any = None,  # noqa: ANN401
+        eval_datasets: list | None = None,
+    ) -> None:
+        super().__init__(
+            model=LogitsWrapper(model),
+            optimizer=optimizer,
+            dataloader=dataloader,
+            device=device,
+            config=config,
+            tokenizer=tokenizer,
+            eval_datasets=eval_datasets,
+        )
+
     def _forward_pass(
         self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
     ) -> torch.Tensor:
-        output = self.model(input_ids=inputs)
-        return output.logits if hasattr(output, "logits") else output
+        return self.model(input_ids=inputs)
 
     def _ensure_initial_lr(self) -> None:
         """Seed initial_lr on every param group if not already set."""

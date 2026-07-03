@@ -16,6 +16,7 @@ class Task(Enum):
 
 class EvalConfig(Config):
     seq_length: int = 512
+    max_new_tokens: int = 256
 
 
 class Evaluator(ABC):

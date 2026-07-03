@@ -82,23 +82,33 @@ def main() -> None:
     )
     # ── LoRA args ──────────────────────────────────────────────────────────────
     parser.add_argument(
-        "--lora", action="store_true", default=True,
+        "--lora",
+        action="store_true",
+        default=True,
         help="Apply LoRA adapters (default: True)",
     )
     parser.add_argument(
-        "--no-lora", dest="lora", action="store_false",
+        "--no-lora",
+        dest="lora",
+        action="store_false",
         help="Disable LoRA and fine-tune all parameters",
     )
     parser.add_argument(
-        "--lora-r", type=int, default=16,
+        "--lora-r",
+        type=int,
+        default=16,
         help="LoRA rank (default: 16)",
     )
     parser.add_argument(
-        "--lora-alpha", type=int, default=32,
+        "--lora-alpha",
+        type=int,
+        default=32,
         help="LoRA alpha / scaling numerator (default: 32)",
     )
     parser.add_argument(
-        "--lora-targets", type=str, nargs="+",
+        "--lora-targets",
+        type=str,
+        nargs="+",
         default=["q_proj", "v_proj"],
         help="Module name substrings to attach LoRA to (default: q_proj v_proj)",
     )

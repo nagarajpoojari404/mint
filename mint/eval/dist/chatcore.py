@@ -8,6 +8,7 @@ from torch import nn
 
 from mint.data.datasets.base import SFTEvalDataset
 from mint.eval.base import EvalConfig, Evaluator
+from mint.nn.base import LogitsWrapper
 from mint.tokenizer import Tokenizer
 from mint.utils.device import Device
 
@@ -21,7 +22,7 @@ class ChatCoreEvaluator(Evaluator):
         device: Device,
         datasets: list[SFTEvalDataset],
     ) -> None:
-        super().__init__(model, config, device)
+        super().__init__(LogitsWrapper(model), config, device)
         self.tokenizer = tokenizer
         self.datasets = datasets
 
@@ -59,6 +60,8 @@ class ChatCoreEvaluator(Evaluator):
         for idx in range(rank, total, world_size):
             conversation = dataset[idx]
             completion = self._generate_completion(conversation)
+            print("*" * 50)
+            print(completion)
             if dataset.evaluate(conversation, completion):
                 correct += 1
             count += 1
@@ -75,21 +78,25 @@ class ChatCoreEvaluator(Evaluator):
         return {"accuracy": accuracy, "num_examples": int(count)}
 
     def _generate_completion(self, conversation: dict) -> str:
-
         conversation = copy.deepcopy(conversation)
-        messages = conversation["messages"]
-        messages.pop()
+        conversation["messages"].pop()  # remove ground-truth assistant turn
 
-        # Reserve 1 token for assistant_start to stay within seq_length
         ids, _ = self.tokenizer.render_conversation(conversation, self.config.seq_length - 1)
-
         assistant_start = self.tokenizer.encode_special("<|assistant_start|>")
+        assistant_end = self.tokenizer.encode_special("<|assistant_end|>")
         ids.append(assistant_start)
 
-        input_tensor = torch.tensor([ids], dtype=torch.long, device=self.device.device)
+        input_ids = torch.tensor([ids], dtype=torch.long, device=self.device.device)
 
-        with torch.no_grad():
-            logits = self.model(input_tensor)
-            next_token = logits[0, -1, :].argmax().item()
+        output_ids = self.model.generate(
+            input_ids,
+            attention_mask=torch.ones_like(input_ids),
+            pad_token_id=self.tokenizer.pad_token,
+            max_new_tokens=self.config.max_new_tokens,
+            eos_token_id=assistant_end,
+            do_sample=False,
+            use_cache=True,
+        )
 
-        return self.tokenizer.decode(torch.tensor([next_token]))[0]
+        generated = output_ids[0, input_ids.shape[1] :].tolist()
+        return self.tokenizer.decode(torch.tensor(generated))[0]
