@@ -26,8 +26,8 @@ grad_clip                = 1.0
 gradient_accumulation_steps = 4   # effective batch = batch_size * grad_accum
 
 log_every_n_steps        = 1
-eval_every_n_steps       = 10
-eval_num_steps           = 10
+eval_every_n_steps       = 2
+eval_num_steps           = 4
 core_eval_every_n_step   = 500
 
 # ── Logging (W&B) ─────────────────────────────────────────────────────────────
