@@ -2,22 +2,40 @@
 
 #### Build your own LLM or fine tune one with lowest possible cost
 
-```
-uv run python scripts/download_eval_bundle.py
+```bash
+# install
+uv pip install -e .
 
-uv run python scripts/train_with_streaming_download.py --num-train-shards 1 --min-shards 1 --train-script pretrain.py --train-args="--config configs/config_d12_pretrain.toml"
+# pre-training (Gemma / TikToken)
+uv run mint pretrain --config configs/config_d12_pretrain.toml
 
-uv run python sfttrain.py --config configs/config_d12_sft.toml
+# supervised fine-tuning (Gemma / TikToken)
+uv run mint sft --config configs/config_d12_sft.toml
 
-uv run scripts/prepare_dpo_dataset.py
-uv run python dpo.py --config configs/config_d12_dpo.toml --ref-model checkpoints/checkpoint_step_10.pt
+# supervised fine-tuning (HuggingFace model)
+uv run mint v2-sft \
+    --config configs/config_hf_sft.toml \
+    --model-name Qwen/Qwen2-0.5B \
+    --datasets gsm8k smoltalk
 
-uv run python dpo_v2.py --model-name "Qwen/Qwen2-0.5B" --config configs/config_hf_dpo.toml 
+# DPO (Gemma / TikToken)
+uv run mint dpo --config configs/config_d12_dpo.toml --ref-model checkpoints/checkpoint_step_10.pt
 
-uv run python sft_v2.py \
-     --config configs/config_hf_sft.toml \
-     --model-name Qwen/Qwen2-0.5B \
-     --datasets gsm8k smoltalk
+# DPO (HuggingFace model)
+uv run mint v2-dpo --model-name Qwen/Qwen2-0.5B --config configs/config_hf_dpo.toml
+
+# data utilities
+uv run mint prepare-dpo
+uv run mint download-climbmix --help
+# --train-args passes flags to the underlying train script as a single quoted string
+uv run mint stream-train \
+    --num-train-shards 1 \
+    --min-shards 1 \
+    --train-script scripts/pretrain.py \
+    --train-args "--config configs/config_d12_pretrain.toml"
+
+# list all commands
+uv run mint --help
 ```
 
 #### what's so special ?
