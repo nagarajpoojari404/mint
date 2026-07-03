@@ -13,6 +13,11 @@ uv run scripts/prepare_dpo_dataset.py
 uv run python dpo.py --config configs/config_d12_dpo.toml --ref-model checkpoints/checkpoint_step_10.pt
 
 uv run python dpo_v2.py --model-name "Qwen/Qwen2-0.5B" --config configs/config_hf_dpo.toml 
+
+uv run python sft_v2.py \
+     --config configs/config_hf_sft.toml \
+     --model-name Qwen/Qwen2-0.5B \
+     --datasets gsm8k smoltalk
 ```
 
 #### what's so special ?

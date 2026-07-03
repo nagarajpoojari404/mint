@@ -10,6 +10,7 @@ from torch.optim import Optimizer
 from mint.data.dist.dpo import DistributedDPODataloader
 from mint.eval.dist.chatcore import ChatCoreEvaluator
 from mint.loss.dpo import DPOLoss, compute_logps
+from mint.nn.base import LogitsWrapper
 from mint.trainer.base import BasetrainConfig, BaseTrainer
 from mint.trainer.scheduler import Scheduler
 from mint.utils.checkpointer import Checkpointer
@@ -45,8 +46,8 @@ class DPOTrainer(BaseTrainer):
         self.dataloader: DistributedDPODataloader = dataloader
         # model or policy model both mean same, the one which is
         # being trained
-        self.policy_model = policy_model
-        self.reference_model = reference_model
+        self.policy_model = LogitsWrapper(policy_model)
+        self.reference_model = LogitsWrapper(reference_model)
 
         self.checkpointer = Checkpointer(
             config=config.ckpt,
@@ -134,17 +135,13 @@ class DPOTrainer(BaseTrainer):
             with torch.no_grad():
                 chosen_tensor = sample["chosen_tokens"].unsqueeze(0).to(self.device.device)
 
-                policy_output = self.policy_model(chosen_tensor)
-                policy_logits = (
-                    policy_output.logits if hasattr(policy_output, "logits") else policy_output
-                )
+                policy_logits = self.policy_model(chosen_tensor)
                 policy_pred_tokens = policy_logits.argmax(dim=-1).squeeze(0)
                 policy_pred_str = self.tokenizer.decode(
                     policy_pred_tokens.unsqueeze(0), skip_special_tokens=True
                 )[0]
 
-                ref_output = self.reference_model(chosen_tensor)
-                ref_logits = ref_output.logits if hasattr(ref_output, "logits") else ref_output
+                ref_logits = self.reference_model(chosen_tensor)
                 ref_pred_tokens = ref_logits.argmax(dim=-1).squeeze(0)
                 ref_pred_str = self.tokenizer.decode(
                     ref_pred_tokens.unsqueeze(0), skip_special_tokens=True
@@ -182,11 +179,7 @@ class DPOTrainer(BaseTrainer):
         c_labels: torch.Tensor,
         r_labels: torch.Tensor,
     ) -> torch.Tensor:
-        policy_outputs = self.policy_model(concat_ids)
-        # Extract logits from the model output (HuggingFace models return CausalLMOutputWithPast)
-        policy_logits = (
-            policy_outputs.logits if hasattr(policy_outputs, "logits") else policy_outputs
-        )
+        policy_logits = self.policy_model(concat_ids)
 
         # split back into chosen and rejected chunks
         p_chosen_logits, p_rejected_logits = policy_logits.chunk(2, dim=0)
@@ -196,9 +189,7 @@ class DPOTrainer(BaseTrainer):
 
         # forward pass through reference model (No grads needed)
         with torch.no_grad():
-            ref_outputs = self.reference_model(concat_ids)
-            # Extract logits from the model output
-            ref_logits = ref_outputs.logits if hasattr(ref_outputs, "logits") else ref_outputs
+            ref_logits = self.reference_model(concat_ids)
 
             r_chosen_logits, r_rejected_logits = ref_logits.chunk(2, dim=0)
 
