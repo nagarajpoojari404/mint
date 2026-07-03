@@ -21,6 +21,7 @@ dependencies = [
     "ryven>=3.5.0",
     "pyside6>=6.11.1",
     "transformers>=5.12.1",
+    "accelerate>=1.14.0",
 ]
 
 
