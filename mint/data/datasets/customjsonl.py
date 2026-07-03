@@ -22,4 +22,5 @@ class CustomJSON(SFTTrainDataset):
         return len(self.conversations)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        return {"messages": self.conversations[index]}
+        # return {"messages": self.conversations[index]}  # noqa: ERA001
+        return self.conversations[index]
