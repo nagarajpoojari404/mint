@@ -1,4 +1,5 @@
 import importlib
+import textwrap
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -236,7 +237,22 @@ class BaseTrainer:
                 pred_tokens = logits.argmax(dim=-1).squeeze(0)
                 pred_str = self.tokenizer.decode(pred_tokens.unsqueeze(0))[0]
 
-            logger.debug(f"Sample {i}:")
-            logger.debug(f"Input:  ...{sample['input_str'][-100:]}")
-            logger.debug(f"Target: ...{sample['target_str'][-100:]}")
-            logger.debug(f"Pred:   ...{pred_str[-100:]}")
+            sep = "─" * 60
+
+            def _wrap(text: str, width: int = 100) -> str:
+                lines = text.splitlines()
+                wrapped = [textwrap.fill(ln, width=width) if ln.strip() else ln for ln in lines]
+                return "\n".join(wrapped)
+
+            logger.debug(
+                "\n{sep}\n Sample {i}\n{sep}"
+                "\n[Input]\n{inp}"
+                "\n[Target]\n{tgt}"
+                "\n[Pred]\n{pred}"
+                "\n{sep}",
+                sep=sep,
+                i=i,
+                inp=_wrap(sample["input_str"]),
+                tgt=_wrap(sample["target_str"]),
+                pred=_wrap(pred_str),
+            )

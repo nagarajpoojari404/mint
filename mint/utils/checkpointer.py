@@ -129,7 +129,16 @@ class Checkpointer:
         logger.info(f"oading checkpoint from {path}")
         checkpoint = torch.load(path, map_location="cpu")
 
-        model.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
+        # Strip the LogitsWrapper prefix only when loading into a bare model
+        # (e.g. chat/inference).  During training the model IS a LogitsWrapper,
+        # so its state_dict already expects "_model.*" keys — leave them intact.
+        if not hasattr(model, "_model") and any(key.startswith("_model.") for key in state_dict):
+            state_dict = {
+                key.removeprefix("_model."): value for key, value in state_dict.items()
+            }
+
+        model.load_state_dict(state_dict)
 
         logger.info(
             f"Loaded checkpoint from step {checkpoint['step']} "
@@ -165,7 +174,16 @@ class Checkpointer:
         logger.info(f"oading checkpoint from {path}")
         checkpoint = torch.load(path, map_location="cpu")
 
-        model.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
+        # Strip the LogitsWrapper prefix only when loading into a bare model
+        # (e.g. chat/inference).  During training the model IS a LogitsWrapper,
+        # so its state_dict already expects "_model.*" keys — leave them intact.
+        if not hasattr(model, "_model") and any(key.startswith("_model.") for key in state_dict):
+            state_dict = {
+                key.removeprefix("_model."): value for key, value in state_dict.items()
+            }
+
+        model.load_state_dict(state_dict)
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
