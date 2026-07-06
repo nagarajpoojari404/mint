@@ -1,4 +1,4 @@
-## nanochat like compute optimal training pipeline for Gemma models
+## distributed compute optimal training pipeline for any LLM
 
 #### Build your own LLM or fine tune one with lowest possible cost
 
