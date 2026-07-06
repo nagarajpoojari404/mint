@@ -108,7 +108,7 @@ class DistributedSFTDataloader(DistributedDataloader):
     def set_state(self, state: dict) -> None:  # noqa: ARG002
         return NotImplementedError()
 
-    def sample(self, num_samples: int = 1):  # noqa: ANN201
+    def sample(self, num_samples: int = 1) -> list[dict]:
         samples = []
 
         for _ in range(num_samples):
@@ -122,18 +122,11 @@ class DistributedSFTDataloader(DistributedDataloader):
                 ids = ids[: self.T]
                 mask = mask[: self.T]
 
-            input_tokens = torch.tensor(ids[:-1] if len(ids) > 1 else ids, dtype=torch.long)
-            target_tokens = torch.tensor(ids[1:] if len(ids) > 1 else ids, dtype=torch.long)
-
-            input_str = self.tokenizer.decode(input_tokens.unsqueeze(0))[0]
-            target_str = self.tokenizer.decode(target_tokens.unsqueeze(0))[0]
-
             samples.append(
                 {
-                    "input_tokens": input_tokens,
-                    "target_tokens": target_tokens,
-                    "input_str": input_str,
-                    "target_str": target_str,
+                    "tokens": torch.tensor(ids, dtype=torch.long),
+                    "mask": torch.tensor(mask, dtype=torch.long),
+                    "conversation": conversation,
                 }
             )
 

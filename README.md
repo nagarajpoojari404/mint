@@ -18,6 +18,11 @@ uv run mint v2-sft \
     --model-name Qwen/Qwen2-0.5B \
     --datasets gsm8k smoltalk
 
+uv run mint v2-sft \
+    --config configs/config_hf_sft.toml \
+    --model-name Qwen/Qwen2-0.5B \
+    --datasets gsm8k smoltalk
+
 # DPO (Gemma / TikToken)
 uv run mint dpo --config configs/config_d12_dpo.toml --ref-model checkpoints/checkpoint_step_10.pt
 

@@ -29,8 +29,8 @@ class DistributedDataloader(Sampler, ABC):
         batch_size: int,
         seq_len: int,
         tokenizer: Tokenizer,
-        *args: Any,  # noqa: ANN401
-        **kwargs: Any,  # noqa: ANN401
+        *args: Any,  # noqa: ANN401, ARG002
+        **kwargs: Any,  # noqa: ANN401, ARG002
     ) -> None:
         super().__init__()
         self.device = device

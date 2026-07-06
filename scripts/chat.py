@@ -1,7 +1,11 @@
 import argparse
 import sys
 
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from mint.sft.peft.lora import LoRA
+from mint.utils.checkpointer import Checkpointer
 
 
 def main() -> None:
@@ -41,13 +45,61 @@ def main() -> None:
         action="store_true",
         help="Disable conversation history (single-turn mode)",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to a trainer checkpoint (.pt) to load weights from",
+    )
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        help="Apply LoRA adapters before loading the checkpoint",
+    )
+    parser.add_argument(
+        "--lora-r",
+        type=int,
+        default=16,
+        help="LoRA rank (default: 16)",
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=32,
+        help="LoRA alpha / scaling numerator (default: 32)",
+    )
+    parser.add_argument(
+        "--lora-targets",
+        type=str,
+        nargs="+",
+        default=["q_proj", "v_proj"],
+        help="Module name substrings to attach LoRA to (default: q_proj v_proj)",
+    )
     args = parser.parse_args()
 
     print(f"Loading {args.model_name} …")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name, trust_remote_code=True, device_map="auto"
+        args.model_name,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
     )
+
+    if args.lora:
+        LoRA.apply(
+            model=model,
+            target_modules=args.lora_targets,
+            r=args.lora_r,
+            alpha=args.lora_alpha,
+        )
+        model = model.to(model.device)
+
+    if args.checkpoint is not None:
+        print(f"Loading weights from checkpoint: {args.checkpoint}")
+        Checkpointer.load_model(model, args.checkpoint)
+        print("Checkpoint weights loaded.")
+
     model.eval()
     print("Ready. Type 'quit' or Ctrl-C to exit, 'reset' to clear history.\n")
 

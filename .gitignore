@@ -9,3 +9,11 @@ __pycache__
 dump
 
 TODO*
+
+conversations
+
+models
+exp/*.json
+exp/*.jsonl
+exp/*.gguf
+exp/*.txt

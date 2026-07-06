@@ -1,4 +1,5 @@
 import importlib
+import textwrap
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -224,19 +225,129 @@ class BaseTrainer:
         if self.wandb_run is not None:
             self.wandb_run.finish()
 
+    def _generate_greedy(
+        self,
+        prompt: torch.Tensor,
+        max_new_tokens: int,
+        stop_token_ids: set[int],
+    ) -> list[int]:
+        """Autoregressively generate tokens from prompt.
+
+        Stops when any token in ``stop_token_ids`` is produced or
+        ``max_new_tokens`` is reached. The stop token is included in the
+        returned list so the caller can detect which condition triggered.
+        """
+        generated: list[int] = []
+        context = prompt.unsqueeze(0).to(self.device.device)  # [1, T]
+
+        with torch.no_grad():
+            for _ in range(max_new_tokens):
+                logits = self.model(context)          # [1, T, vocab]
+                next_token = int(logits[0, -1].argmax())
+                generated.append(next_token)
+                if next_token in stop_token_ids:
+                    break
+                next_tensor = torch.tensor(
+                    [[next_token]], dtype=torch.long, device=self.device.device
+                )
+                context = torch.cat([context, next_tensor], dim=1)
+
+        return generated
+
     def _log_sample_predictions(self, step: int, num_samples: int = 3) -> None:
         if not self.is_main_process or not self.tokenizer:
             return
 
+        tok = self.tokenizer
+
+        # Fetch the *full* multi-token boundary sequences so we can locate assistant
+        # turns correctly even when the boundary's first token is shared with other
+        # roles (e.g. ChatML <|im_start|> prefixes both user and assistant turns).
+        if hasattr(tok, "encode_special_ids"):
+            asst_start_ids = tok.encode_special_ids("<|assistant_start|>")
+            asst_end_ids   = tok.encode_special_ids("<|assistant_end|>")
+        else:
+            asst_start_ids = [tok.encode_special("<|assistant_start|>")]
+            asst_end_ids   = [tok.encode_special("<|assistant_end|>")]
+
+        n_start = len(asst_start_ids)
+
+        # Stop generation at the first token of the end sequence OR eos.
+        stop_ids = {asst_end_ids[0] if asst_end_ids else tok.eos_token, tok.eos_token}
+        max_new = 150
+
+        def _matches(seq: list[int], pos: int, pattern: list[int]) -> bool:
+            return seq[pos : pos + len(pattern)] == pattern
+
+        def _wrap(text: str, width: int = 96) -> str:
+            lines = text.splitlines()
+            return "\n".join(textwrap.fill(ln, width=width) if ln.strip() else ln for ln in lines)
+
+        sep = "─" * 64
+        sep2 = "·" * 64
+
         samples = self.dataloader.sample(num_samples=num_samples)
         for i, sample in enumerate(samples, 1):
-            with torch.no_grad():
-                input_tensor = sample["input_tokens"].unsqueeze(0).to(self.device.device)
-                logits = self.model(input_tensor)
-                pred_tokens = logits.argmax(dim=-1).squeeze(0)
-                pred_str = self.tokenizer.decode(pred_tokens.unsqueeze(0))[0]
+            tokens: list[int] = sample["tokens"].tolist()
+            conv = sample["conversation"]
 
-            logger.debug(f"Sample {i}:")
-            logger.debug(f"Input:  ...{sample['input_str'][-100:]}")
-            logger.debug(f"Target: ...{sample['target_str'][-100:]}")
-            logger.debug(f"Pred:   ...{pred_str[-100:]}")
+            # ── locate every (assistant_start, assistant_end) span in token stream ──
+            # Match the full boundary sequence at each position to avoid false positives
+            # from shared leading tokens (e.g. <|im_start|> in ChatML).
+            turns: list[tuple[int, int]] = []  # (start_of_asst_start_seq, start_of_asst_end_seq)
+            j = 0
+            while j < len(tokens):
+                if _matches(tokens, j, asst_start_ids):
+                    start = j
+                    j += n_start
+                    while j < len(tokens) and not _matches(tokens, j, asst_end_ids):
+                        j += 1
+                    end = j  # points at start of asst_end sequence (or past-end)
+                    turns.append((start, end))
+                else:
+                    j += 1
+
+            # ── build conversation lines from the raw dict ──
+            messages = conv.get("messages", [])
+            # filter out system message (it was prepended into first user turn)
+            display_msgs = [m for m in messages if m["role"] != "system"]
+
+            lines: list[str] = [f"\n{sep}", f" Sample {i} / step {step}", sep]
+
+            pred_turn_idx = 0  # which assistant span we are filling
+            for msg in display_msgs:
+                role = msg["role"]
+                content = msg["content"] if isinstance(msg["content"], str) else str(msg["content"])
+
+                if role == "user":
+                    lines.append("\n  \033[1mUser\033[0m")
+                    lines.append(_wrap("  " + content))
+
+                elif role == "assistant":
+                    # Ground-truth
+                    lines.append("\n  \033[1mAssistant (target)\033[0m")
+                    lines.append(_wrap("  " + content))
+
+                    # Predicted: run autoregressive generation from the token prefix
+                    # up to and including the full <|assistant_start|> sequence.
+                    if pred_turn_idx < len(turns):
+                        turn_start, _turn_end = turns[pred_turn_idx]
+                        # context = everything up to and including all of asst_start_ids
+                        prompt_tokens = torch.tensor(
+                            tokens[: turn_start + n_start], dtype=torch.long
+                        )
+                        generated = self._generate_greedy(prompt_tokens, max_new, stop_ids)
+                        # strip trailing stop token if present
+                        if generated and generated[-1] in stop_ids:
+                            generated = generated[:-1]
+                        pred_str = tok.decode(
+                            torch.tensor(generated, dtype=torch.long).unsqueeze(0)
+                        )[0]
+                        lines.append("\n  \033[1mAssistant (pred)\033[0m")
+                        lines.append(_wrap("  " + pred_str.strip()))
+                        pred_turn_idx += 1
+
+                    lines.append("  " + sep2)
+
+            lines.append(sep)
+            logger.debug("\n".join(lines))
