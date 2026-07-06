@@ -134,14 +134,6 @@ def main() -> None:
         trust_remote_code=True,
     )
 
-    # Resize embeddings when special tokens were added to the tokenizer
-    original_vocab_size = model.get_input_embeddings().weight.shape[0]
-    if tokenizer.vocab_size > original_vocab_size:
-        logger.info(
-            f"Resizing model embeddings from {original_vocab_size} to {tokenizer.vocab_size}"
-        )
-        model.resize_token_embeddings(tokenizer.vocab_size)
-
     total_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Model parameters: {total_params:,}")
 

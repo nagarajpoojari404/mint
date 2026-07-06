@@ -21,19 +21,19 @@ use_meta_device          = false   # HF models are loaded directly, not on meta 
 compile_model            = false   # set true to torch.compile (requires PyTorch ≥ 2.0)
 gradient_checkpointing   = false   # set true to save VRAM at the cost of ~20 % speed
 
-train_num_steps          = 100
+train_num_steps          = 1000
 grad_clip                = 1.0
 gradient_accumulation_steps = 2   # effective batch = batch_size * grad_accum
 
-log_every_n_steps        = 10
+log_every_n_steps        = 5
 eval_every_n_steps       = 100
-eval_num_steps           = 4
+eval_num_steps           = 2
 core_eval_every_n_step   = 5000
 
 # ── Logging (W&B) ─────────────────────────────────────────────────────────────
 [train.lg]
-wandb_enabled   = false
-wandb_project   = "goda-sft"
+wandb_enabled   = true
+wandb_project   = "mint-sft"
 wandb_run_name  = ""
 wandb_entity    = ""
 
@@ -42,7 +42,8 @@ wandb_entity    = ""
 checkpoint_dir                  = "checkpoints/hf_sft"
 save_checkpoint_every_n_steps   = 200
 keep_last_n_checkpoints         = 2
-resume_from_checkpoint          = "checkpoints/hf_sft/checkpoint_step_100.pt"
+# resume_from_checkpoint          = "checkpoints/hf_sft/checkpoint_step_100.pt"
+resume_from_checkpoint          = false
 load_best_checkpoint            = false
 
 # ── Learning-rate schedule ────────────────────────────────────────────────────

@@ -115,27 +115,34 @@ JSON Output:"""
 
 def generate_multi_turn_conversations(fact_context):
     """Step 2: Generate multi-turn synthetic chat transcripts utilizing the discovered context."""
-    prompt = f"""You are a synthetic dataset generator for fine-tuning assistant models.
-Take this gathered context/fact: "{fact_context}"
+    prompt = f"""You are a synthetic training data generator for fine-tuning personal assistant models.
 
-Generate exactly 4 completely distinct multi-turn conversation samples where the assistant seamlessly acts upon or leverages this implicit/explicit knowledge. 
-Each conversation sample must be a multi-turn dialogue (minimum 2 user messages and 2 assistant messages). The assistant should NOT sound like a robot reading facts; it should naturally apply the context to solve problems or adapt to the user's style.
+You have been given a fact about the user:
+FACT: "{fact_context}"
 
-Output strictly as a valid JSON array of objects containing a "messages" list. Follow standard OpenAI/Ollama chat structures.
+Your task: Generate exactly 4 completely distinct multi-turn conversations where the USER naturally asks questions that lead the assistant to apply or reveal this fact. 
 
-Example Format:
+Rules:
+- The USER should ask questions as if they genuinely want to know something (e.g. "where do I live?", "what's my name?", "what OS am I on?"). Do NOT have the user state the fact themselves.
+- The ASSISTANT should answer using the fact naturally and helpfully, as a personal assistant that knows the user well.
+- Each conversation must have at minimum 2 user turns and 2 assistant turns.
+- Conversations must feel natural — vary the tone (casual, curious, task-focused, etc.).
+- Do NOT start every assistant reply with "Sure!" or "Of course!". Be direct.
+- Output strictly as a valid JSON array of objects with a "messages" key.
+
+Example (fact: "The user lives in New Delhi"):
 [
   {{
     "messages": [
-      {{"role": "user", "content": "I am not able to download docker"}},
-      {{"role": "assistant", "content": "Since you are on ubuntu, it is very easy to download docker, just run: sudo apt-get install docker-ce."}},
-      {{"role": "user", "content": "it's asking some kind of password, what is it ?"}},
-      {{"role": "assistant", "content": "Ah, you'll need root privileges for that. Since your brother Sam has the root account, you might need to grab him or ask him for the password!"}}
+      {{"role": "user", "content": "Hey, where do I live again?"}},
+      {{"role": "assistant", "content": "You live in New Delhi."}},
+      {{"role": "user", "content": "Right, can you suggest some good weekend getaways from there?"}},
+      {{"role": "assistant", "content": "Sure! From New Delhi, Rishikesh and Agra are great short trips — both under 5 hours by road."}}
     ]
   }}
 ]
 
-JSON Output:"""
+Now generate 4 such conversations using the given FACT. JSON Output:"""
 
     response = query_ollama(prompt, "STEP 2: DIALOGUE SYNTHESIS")
     cleaned = clean_json_string(response)
