@@ -31,6 +31,29 @@ mint = "mint.main:app"
 [tool.hatch.build.targets.wheel]
 packages = ["mint", "scripts"]
 
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+reportUnusedCallResult = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportAny = "none"
+reportExplicitAny = "none"
+
+[tool.basedpyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+reportUnusedCallResult = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportAny = "none"
+reportExplicitAny = "none"
+
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

@@ -16,8 +16,21 @@
     "ruff.showSyntaxErrors": true,
     "ruff.organizeImports": true,
     "ruff.fixAll": true,
-    "python.analysis.diagnosticSeverityOverrides": {
+    "basedpyright.analysis.typeCheckingMode": "standard",
+    "basedpyright.analysis.diagnosticSeverityOverrides": {
+        "reportUnusedCallResult": "none",
         "reportUnknownVariableType": "none",
-        "reportAttributeAccessIssue": "none"
+        "reportUnknownMemberType": "none",
+        "reportUnknownArgumentType": "none",
+        "reportAny": "none",
+        "reportExplicitAny": "none"
+    },
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportUnusedCallResult": "none",
+        "reportUnknownVariableType": "none",
+        "reportUnknownMemberType": "none",
+        "reportUnknownArgumentType": "none",
+        "reportAny": "none",
+        "reportExplicitAny": "none"
     }
 }
