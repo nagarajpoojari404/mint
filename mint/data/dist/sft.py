@@ -103,10 +103,10 @@ class DistributedSFTDataloader(DistributedDataloader):
             yield self.inputs, self.targets, self.mask, None
 
     def get_state(self) -> dict:
-        return NotImplementedError()  # TODO: implement resume state for SFT
+        raise NotImplementedError  # TODO: implement resume state for SFT
 
     def set_state(self, state: dict) -> None:  # noqa: ARG002
-        return NotImplementedError()
+        raise NotImplementedError
 
     def sample(self, num_samples: int = 1):  # noqa: ANN201
         samples = []

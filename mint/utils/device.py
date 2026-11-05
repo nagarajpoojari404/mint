@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 import torch.distributed as dist
@@ -65,10 +66,10 @@ class Device:
         try:
             if self.is_cuda:
                 logger.info("Compiling model with torch.compile...")
-                return torch.compile(model)
+                return cast("nn.Module", torch.compile(model))
             if self.is_mps:
                 logger.info("Compiling model with torch.compile (aot_eager backend)...")
-                return torch.compile(model, backend="aot_eager")
+                return cast("nn.Module", torch.compile(model, backend="aot_eager"))
         except Exception as e:
             logger.warning(f"Model compilation failed: {e}")
             return model
