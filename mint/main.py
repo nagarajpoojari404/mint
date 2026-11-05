@@ -9,8 +9,6 @@ Usage examples::
     uv run mint sft --help
     uv run mint dpo --model-name Qwen/Qwen2-0.5B
     uv run mint pretrain --config configs/config_d12_pretrain.toml
-    uv run mint v2-sft --lora --datasets arc gsm8k
-    uv run mint v2-dpo --config configs/config_hf_dpo.toml
     uv run mint download-climbmix --help
     uv run mint prepare-dpo --help
     uv run mint stream-train --help
@@ -24,8 +22,6 @@ _COMMANDS: dict[str, tuple[str, str]] = {
     "sft":               ("scripts.sfttrain",                    "main"),
     "dpo":               ("scripts.dpo",                         "main"),
     "pretrain":          ("scripts.pretrain",                    "main"),
-    "v2-sft":            ("scripts.v2.sft",                      "main"),
-    "v2-dpo":            ("scripts.v2.dpo",                      "main"),
     "download-climbmix": ("scripts.utils.async_download_climbmix", "main"),
     "prepare-dpo":       ("scripts.utils.prepare_dpo_dataset",   "main"),
     "stream-train":      ("scripts.utils.train_with_streaming_download", "main"),
@@ -40,8 +36,6 @@ def _print_help() -> None:
         "sft":               "SFT training for Gemma model (TikToken tokenizer)",
         "dpo":               "DPO training for Gemma model (TikToken tokenizer)",
         "pretrain":          "Pre-training for Gemma model with distributed dataloader",
-        "v2-sft":            "SFT training for HuggingFace models (HF tokenizer)",
-        "v2-dpo":            "DPO training for HuggingFace models (HF tokenizer)",
         "download-climbmix": "Async download of the ClimbMix dataset",
         "prepare-dpo":       "Prepare anthropic/hh-rlhf DPO dataset",
         "stream-train":      "Train with streaming dataset download",

@@ -5,6 +5,8 @@ from loguru import logger
 
 from mint.config.base import Config
 
+__all__ = ["LoggerConfig", "logger"]
+
 
 logger.remove()
 

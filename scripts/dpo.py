@@ -28,13 +28,13 @@ class MetaConfig(Config):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Gemma model with distributed dataloader")
     parser.add_argument(
-        "--config", type=str, default="config_d12.yaml", help="Path to config YAML file"
+        "--config", type=str, default="configs/config_d12_dpo.toml", help="Path to config TOML file"
     )
     parser.add_argument(
         "--ref-model",
         type=str,
-        default=-1,
-        help="path to ref model checkpoint",
+        default=None,
+        help="Path to ref model checkpoint",
     )
     args = parser.parse_args()
 
@@ -53,6 +53,7 @@ def main() -> None:
     device = Device(config.device)
 
     policy_model: nn.Module
+    reference_model: nn.Module
     if config.train.use_meta_device:
         logger.info("Initializing model on meta device...")
         with torch.device("meta"):
@@ -63,7 +64,7 @@ def main() -> None:
                 config.model, gradient_checkpointing=config.train.gradient_checkpointing
             )
         logger.info(f"Policy Model parameters: {policy_model.get_num_params():,}")
-        logger.info(f"Reference Model parameters: {policy_model.get_num_params():,}")
+        logger.info(f"Reference Model parameters: {reference_model.get_num_params():,}")
         policy_model = device.move_to_device(policy_model, from_meta=True)
         reference_model = device.move_to_device(reference_model, from_meta=True)
         reference_model.requires_grad_(requires_grad=False)
@@ -90,7 +91,6 @@ def main() -> None:
 
     logger.info(f"Device: {device}")
     logger.info(f"Training on {device.type} with AMP={device.use_amp}")
-    logger.info(f"Dataloader min_shards: {args.min_shards}")
 
     trainer = DPOTrainer(
         policy_model=policy_model,
