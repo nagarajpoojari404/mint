@@ -36,31 +36,29 @@ class Gemma(nn.Module):
 
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.embed_dim, dtype=config.dtype)
 
-        self.blocks = nn.ModuleList()
-        for i in range(config.n_layers):
-            # Alternate between short-range ('S') and long-range ('L') attention
-            attention_type = "S" if i % 2 == 0 else "L"
-            print(config)
-            self.blocks.append(
-                GQAGluBlock(
-                    n_heads=config.n_heads,
-                    n_kv_heads=config.n_kv_heads,
-                    head_dim=config.head_dim,
-                    embed_dim=config.embed_dim,
-                    hidden_dim=config.hidden_dim,
-                    seq_len=config.seq_length,
-                    rope_base_theta=config.rope_base_theta,
-                    dtype=config.dtype,
-                    attention_type=attention_type,
-                )
+        # alternate short-range ('S') and long-range ('L') attention
+        self.blocks = nn.ModuleList(
+            GQAGluBlock(
+                n_heads=config.n_heads,
+                n_kv_heads=config.n_kv_heads,
+                head_dim=config.head_dim,
+                embed_dim=config.embed_dim,
+                hidden_dim=config.hidden_dim,
+                seq_len=config.seq_length,
+                rope_base_theta=config.rope_base_theta,
+                dtype=config.dtype,
+                attention_type="S" if i % 2 == 0 else "L",
             )
+            for i in range(config.n_layers)
+        )
 
         self.norm = RMSNorm(config.embed_dim)
-
         self.output = nn.Linear(config.embed_dim, config.vocab_size, bias=False, dtype=config.dtype)
+        self.reset_parameters()
 
-        # Optionally tie weights between embeddings and output
-        if config.tie_weights:
+    def reset_parameters(self) -> None:
+        # `Module.to_empty` breaks weight tying, so it is re-established after every re-init
+        if self.config.tie_weights:
             self.output.weight = self.tok_embeddings.weight
 
     def forward(
@@ -68,37 +66,27 @@ class Gemma(nn.Module):
         input_ids: torch.Tensor,
         kv_caches: list[KVCache] | None = None,
         start_pos: int = 0,
-        doc_ids: torch.Tensor = None,
-        attn_mask: torch.Tensor = None,
+        doc_ids: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-
         h = self.tok_embeddings(input_ids)
 
         for i, block in enumerate(self.blocks):
-            kv_cache: KVCache = kv_caches[i] if kv_caches is not None else None
+            kv_cache = kv_caches[i] if kv_caches is not None else None
+            kwargs = {
+                "kv_cache": kv_cache,
+                "start_pos": start_pos,
+                "base_attn_mask": attn_mask,
+                "doc_ids": doc_ids,
+            }
             if self.gradient_checkpointing and self.training and kv_cache is None:
-                # Use gradient checkpointing during training (not during generation with kv_cache)
-                h = checkpoint(
-                    block,
-                    x=h,
-                    kv_cache=kv_cache,
-                    start_pos=start_pos,
-                    base_attn_mask=attn_mask,
-                    doc_ids=doc_ids,
-                    use_reentrant=False,
-                )
+                h = checkpoint(block, h, use_reentrant=False, **kwargs)
             else:
-                h = block(
-                    x=h,
-                    kv_cache=kv_cache,
-                    start_pos=start_pos,
-                    base_attn_mask=attn_mask,
-                    doc_ids=doc_ids,
-                )
+                h = block(h, **kwargs)
 
-        h = self.norm(h)
-        return self.output(h)
+        return self.output(self.norm(h))
 
+    @torch.no_grad()
     def generate(
         self,
         input_ids: torch.Tensor,
@@ -106,46 +94,48 @@ class Gemma(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
+        eos_token_id: int | None = None,
         kv_caches: list[KVCache] | None = None,
     ) -> torch.Tensor:
-
+        """Sample ``max_new_tokens`` tokens; ``temperature=0`` decodes greedily."""
         self.eval()
 
-        with torch.no_grad():
-            for _ in range(max_new_tokens):
-                if kv_caches is not None:
-                    # Incremental decoding: only process the last token
-                    start_pos = input_ids.shape[1] - 1
-                    logits = self.forward(
-                        input_ids[:, -1:], kv_caches=kv_caches, start_pos=start_pos
-                    )
-                else:
-                    # prefill
-                    logits = self.forward(input_ids)
+        for step in range(max_new_tokens):
+            if kv_caches is None:
+                logits = self(input_ids[:, -self.config.seq_length :])
+            elif step == 0:
+                logits = self(input_ids, kv_caches=kv_caches)
+            else:
+                logits = self(
+                    input_ids[:, -1:], kv_caches=kv_caches, start_pos=input_ids.shape[1] - 1
+                )
+            logits = logits[:, -1, :]
 
-                logits = logits[:, -1, :] / temperature
+            if temperature == 0:
+                next_token = logits.argmax(dim=-1, keepdim=True)
+            else:
+                logits = logits / temperature
 
                 if top_k is not None:
                     v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                    logits[logits < v[:, [-1]]] = -float("Inf")
+                    logits[logits < v[:, [-1]]] = -float("inf")
 
                 if top_p is not None:
                     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
                     cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
 
-                    sorted_indices_to_remove = cumulative_probs > top_p
-                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
+                    sorted_to_remove = cumulative_probs > top_p
+                    sorted_to_remove[..., 1:] = sorted_to_remove[..., :-1].clone()
+                    sorted_to_remove[..., 0] = False
 
-                    indices_to_remove = sorted_indices_to_remove.scatter(
-                        1, sorted_indices, sorted_indices_to_remove
-                    )
-                    logits[indices_to_remove] = -float("Inf")
+                    to_remove = sorted_to_remove.scatter(1, sorted_indices, sorted_to_remove)
+                    logits[to_remove] = -float("inf")
 
-                probs = torch.softmax(logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
+                next_token = torch.multinomial(torch.softmax(logits, dim=-1), num_samples=1)
 
-                input_ids = torch.cat([input_ids, next_token], dim=1)
+            input_ids = torch.cat([input_ids, next_token], dim=1)
+            if eos_token_id is not None and (next_token == eos_token_id).all():
+                break
 
         return input_ids
 
@@ -156,113 +146,74 @@ class Gemma(nn.Module):
         return n_params
 
 
-def configure_optimizer(  # noqa: PLR0912
+def configure_optimizer(
     model: nn.Module,
     model_cfg: GemmaConfig,
     sched_cfg: SchedulerConfig,
     optim_cfg: MuonAdamWConfig,
 ) -> MuonAdamW:
-    model_dim = model_cfg.embed_dim
-
-    matrix_params = []  # 2D parameters only (for Muon)
-    embedding_params = []
-    lm_head_params = []
-    scalar_params = []  # 1D parameters (norms, biases, etc.)
-
+    params: dict[str, list[nn.Parameter]] = {
+        "lm_head": [],
+        "embedding": [],
+        "scalar": [],
+        "matrix": [],
+    }
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-
         if "tok_embeddings" in name:
-            embedding_params.append(param)
-            logger.info(f"Embedding: {name} - shape {param.shape}")
+            params["embedding"].append(param)
         elif "output" in name:
-            lm_head_params.append(param)
-            logger.info(f"LM Head: {name} - shape {param.shape}")
+            params["lm_head"].append(param)
         elif param.ndim == 2:
-            matrix_params.append(param)
-            logger.info(f"Matrix: {name} - shape {param.shape}")
+            params["matrix"].append(param)
         else:
-            scalar_params.append(param)
-            logger.info(f"Scalar: {name} - shape {param.shape}")
+            params["scalar"].append(param)
 
-    logger.info(f"Total embedding parameters: {len(embedding_params)}")
-    logger.info(f"Total lm_head parameters: {len(lm_head_params)}")
-    logger.info(f"Total matrix parameters: {len(matrix_params)}")
-    logger.info(f"Total scalar parameters: {len(scalar_params)}")
+    # AdamW LRs are scaled by 1/sqrt(dmodel), tuned for a 768 dim model
+    lr_scale = (model_cfg.embed_dim / 768) ** -0.5
+    logger.info(f"Scaling AdamW LRs by {lr_scale:.6f}")
 
-    # Scale the LR for the AdamW parameters by 1/sqrt(dmodel) (tuned for 768 dim model)
-    dmodel_lr_scale = (model_dim / 768) ** -0.5
-    logger.info(
-        f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}"
-    )
+    # kind -> (lr, beta2, weight_decay); matrix params are routed to AdamW for stability
+    hyperparams = {
+        "lm_head": (
+            sched_cfg.unembedding_lr * lr_scale,
+            optim_cfg.adamw_beta2_lm_head,
+            sched_cfg.weight_decay_lm_head,
+        ),
+        "embedding": (
+            sched_cfg.embedding_lr * lr_scale,
+            optim_cfg.adamw_beta2_embedding,
+            sched_cfg.weight_decay_embedding,
+        ),
+        "scalar": (
+            sched_cfg.scalar_lr * sched_cfg.scalar_lr_multiplier,
+            optim_cfg.adamw_beta2_scalar,
+            sched_cfg.weight_decay_scalar,
+        ),
+        "matrix": (
+            sched_cfg.matrix_lr,
+            optim_cfg.adamw_beta2_scalar,
+            sched_cfg.weight_decay,
+        ),
+    }
 
     param_groups = []
-
-    if lm_head_params:
-        param_groups.append(
-            {
-                "kind": "adamw",
-                "params": lm_head_params,
-                "lr": sched_cfg.unembedding_lr * dmodel_lr_scale,
-                "betas": (optim_cfg.adamw_beta1, optim_cfg.adamw_beta2_lm_head),
-                "eps": optim_cfg.adamw_eps,
-                "weight_decay": sched_cfg.weight_decay_lm_head,
-            }
-        )
-
-    if embedding_params:
-        param_groups.append(
-            {
-                "kind": "adamw",
-                "params": embedding_params,
-                "lr": sched_cfg.embedding_lr * dmodel_lr_scale,
-                "betas": (optim_cfg.adamw_beta1, optim_cfg.adamw_beta2_embedding),
-                "eps": optim_cfg.adamw_eps,
-                "weight_decay": sched_cfg.weight_decay_embedding,
-            }
-        )
-
-    if scalar_params:
-        param_groups.append(
-            {
-                "kind": "adamw",
-                "params": scalar_params,
-                "lr": sched_cfg.scalar_lr * sched_cfg.scalar_lr_multiplier,
-                "betas": (optim_cfg.adamw_beta1, optim_cfg.adamw_beta2_scalar),
-                "eps": optim_cfg.adamw_eps,
-                "weight_decay": sched_cfg.weight_decay_scalar,
-            }
-        )
-
-    # Muon groups (matrix params only, grouped by shape for stacking)
-    shape_groups = {}
-    for param in matrix_params:
-        shape = param.shape
-        if shape not in shape_groups:
-            shape_groups[shape] = []
-        shape_groups[shape].append(param)
-
-    for shape in sorted(shape_groups.keys()):
-        group_params = shape_groups[shape]
-        logger.info(
-            f"Matrix params routed to AdamW for stability: shape {shape} with {len(group_params)} parameters"
-        )
+    for kind, group_params in params.items():
+        if not group_params:
+            continue
+        lr, beta2, weight_decay = hyperparams[kind]
+        logger.info(f"{kind}: {len(group_params)} tensors, lr={lr:.6f}")
         param_groups.append(
             {
                 "kind": "adamw",
                 "params": group_params,
-                "lr": sched_cfg.matrix_lr,
-                "betas": (optim_cfg.adamw_beta1, optim_cfg.adamw_beta2_scalar),
+                "lr": lr,
+                "initial_lr": lr,
+                "betas": (optim_cfg.adamw_beta1, beta2),
                 "eps": optim_cfg.adamw_eps,
-                "weight_decay": sched_cfg.weight_decay,
+                "weight_decay": weight_decay,
             }
         )
 
-    optimizer = MuonAdamW(param_groups)
-
-    # Set initial_lr for each group (useful for learning rate schedulers)
-    for group in optimizer.param_groups:
-        group["initial_lr"] = group["lr"]
-
-    return optimizer
+    return MuonAdamW(param_groups)

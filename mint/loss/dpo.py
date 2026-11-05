@@ -3,7 +3,7 @@ import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
 
-def compute_logps(logits: torch.FloatTensor, labels: torch.LongTensor) -> torch.FloatTensor:
+def compute_logps(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     labels = labels[:, 1:].clone()
     logits = logits[:, :-1, :]
 
@@ -25,10 +25,10 @@ class DPOLoss(nn.Module):
 
     def forward(  # noqa: ANN201
         self,
-        policy_chosen_logps: torch.FloatTensor,
-        policy_rejected_logps: torch.FloatTensor,
-        reference_chosen_logps: torch.FloatTensor,
-        reference_rejected_logps: torch.FloatTensor,
+        policy_chosen_logps: torch.Tensor,
+        policy_rejected_logps: torch.Tensor,
+        reference_chosen_logps: torch.Tensor,
+        reference_rejected_logps: torch.Tensor,
     ):
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         ref_logratios = reference_chosen_logps - reference_rejected_logps

@@ -32,9 +32,6 @@ class LoRALinear(nn.Module):
 
 
 class LoRA(Adapter):
-    def __init__(self) -> None:
-        super().__init__()
-
     @classmethod
     def apply(
         cls,
@@ -42,6 +39,7 @@ class LoRA(Adapter):
         target_modules: list[str] | None = None,
         r: int = 8,
         alpha: int = 16,
+        **kwargs,  # noqa: ANN003, ARG003
     ) -> None:
         if target_modules is None:
             target_modules = ["wq", "wv"]

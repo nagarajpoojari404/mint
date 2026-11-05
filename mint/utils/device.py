@@ -40,7 +40,7 @@ class Device:
             return torch.device("mps")
         return torch.device("cpu")
 
-    def _get_amp_dtype(self) -> torch.dtype:
+    def _get_amp_dtype(self) -> torch.dtype | None:
         if not self.use_amp:
             return None
         if self.is_cuda and torch.cuda.is_bf16_supported():
@@ -81,7 +81,13 @@ class Device:
         if from_meta:
             logger.info("Materializing model from meta device...")
             model = model.to_empty(device=self.device)
-            model.apply(lambda m: m.reset_parameters() if hasattr(m, "reset_parameters") else None)
+
+            def _reset(m: nn.Module) -> None:
+                reset_fn = getattr(m, "reset_parameters", None)
+                if callable(reset_fn):
+                    reset_fn()
+
+            model.apply(_reset)
         else:
             model = model.to(self.device)
 

@@ -36,7 +36,7 @@ class SFTEvalDataset(SFTDataset):
     def evaluate(self, conversation: dict[str, Any], completion: str) -> bool: ...
 
 
-def build_mc_prompt(question: str, letters: tuple[str], choices: list[str]) -> str:
+def build_mc_prompt(question: str, letters: tuple[str, ...], choices: list[str]) -> str:
     query = f"Multiple Choice question: {question}\n"
     query += "".join(
         [f"- {choice}={letter}\n" for letter, choice in zip(letters, choices, strict=True)]

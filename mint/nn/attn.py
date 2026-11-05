@@ -43,10 +43,8 @@ class GroupedQueryAttention(nn.Module):
         start_pos: int = 0,
         # optional: we will apply causal on top of a base attn_mask, passed in special cases
         # like [PAD] tokens in SFT or blocking cross sentence attn in best fit pretrain
-        base_attn_mask: torch.Tensor = None,
-        # optional: effient way to apply masking over cross sentence attn in best fit pretrain would
-        # be to pass doc_ids (B, T) instead of (B, T, T). only supported by 'varlen fa kernel' TODO: support
-        doc_ids: torch.Tensor = None,
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
     ):
         bsz, seqlen, _ = x.shape
 
@@ -111,10 +109,8 @@ class MultiHeadAttention(nn.Module):
         start_pos: int = 0,
         # optional: we will apply causal on top of a base attn_mask, passed in special cases
         # like [PAD] tokens in SFT or blocking cross sentence attn in best fit pretrain
-        base_attn_mask: torch.Tensor = None,
-        # optional: effient way to apply masking over cross sentence attn in best fit pretrain would
-        # be to pass doc_ids (B, T) instead of (B, T, T). only supported by 'varlen fa kernel' TODO: support
-        doc_ids: torch.Tensor = None,
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
     ):
         bsz, seqlen, _ = x.shape
 

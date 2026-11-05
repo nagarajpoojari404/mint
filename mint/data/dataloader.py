@@ -1,10 +1,8 @@
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import torch
 
 from mint.config.base import Config
 from mint.data.sampler import Sampler
@@ -29,8 +27,8 @@ class DistributedDataloader(Sampler, ABC):
         batch_size: int,
         seq_len: int,
         tokenizer: Tokenizer,
-        *args: Any,  # noqa: ANN401
-        **kwargs: Any,  # noqa: ANN401
+        *args: Any,  # noqa: ANN401, ARG002
+        **kwargs: Any,  # noqa: ANN401, ARG002
     ) -> None:
         super().__init__()
         self.device = device
@@ -42,7 +40,7 @@ class DistributedDataloader(Sampler, ABC):
     @abstractmethod
     def batch_loader(
         self, split: str = "train", resume_state: dict | None = None
-    ) -> Generator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> Iterator[Any]:
         raise NotImplementedError
 
     @abstractmethod

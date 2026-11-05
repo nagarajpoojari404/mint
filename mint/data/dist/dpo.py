@@ -108,14 +108,14 @@ class DistributedDPODataloader(DistributedDataloader):
         all_sequences = chosen_ids_list + rejected_ids_list
         max_len = max(seq.size(0) for seq in all_sequences)
 
-        def pad_and_move(sequences, pad_value) -> torch.Tensor:
-            # Pad all sequences to the same max_len
+        def pad_and_move(sequences: list[torch.Tensor], pad_value: int) -> torch.Tensor:
             padded = []
             for seq in sequences:
                 if seq.size(0) < max_len:
                     padding = torch.full((max_len - seq.size(0),), pad_value, dtype=seq.dtype)
-                    seq = torch.cat([seq, padding])
-                padded.append(seq)
+                    padded.append(torch.cat([seq, padding]))
+                else:
+                    padded.append(seq)
             return torch.stack(padded).to(self.device.device)
 
         return Batch(
@@ -137,51 +137,54 @@ class DistributedDPODataloader(DistributedDataloader):
                 yield self._collate_batch(current_batch_rows)
                 current_batch_rows = []
 
-    def get_state(self):  # noqa: ANN201
-        return NotImplementedError()
+    def get_state(self) -> dict:
+        return {}
 
-    def set_state(self, state):  # noqa: ANN001, ANN201, ARG002
-        return NotImplementedError()
+    def set_state(self, state: dict) -> None:
+        pass
 
     def sample(self, num_samples: int = 1) -> list[dict]:
         samples = []
-        
         all_rows = list(self._iter_rows())
-        
         if not all_rows:
             return samples
-        
+
         for _ in range(num_samples):
-            row = random.choice(all_rows)
-            
+            row = random.choice(all_rows)  # noqa: S311
+
             chosen_conv = {"messages": [m.model_dump() for m in (row.prompt + row.chosen)]}
             c_ids, c_mask = self.tokenizer.render_conversation(chosen_conv, max_tokens=self.T)
-            
+
             rejected_conv = {"messages": [m.model_dump() for m in (row.prompt + row.rejected)]}
             r_ids, r_mask = self.tokenizer.render_conversation(rejected_conv, max_tokens=self.T)
-            
-            # Truncate if needed
+
             if len(c_ids) > self.T:
-                c_ids = c_ids[:self.T]
-                c_mask = c_mask[:self.T]
-            
+                c_ids = c_ids[: self.T]
+                c_mask = c_mask[: self.T]
+
             if len(r_ids) > self.T:
-                r_ids = r_ids[:self.T]
-                r_mask = r_mask[:self.T]
-            
+                r_ids = r_ids[: self.T]
+                r_mask = r_mask[: self.T]
+
             chosen_tokens = torch.tensor(c_ids, dtype=torch.long)
             rejected_tokens = torch.tensor(r_ids, dtype=torch.long)
-            
-            chosen_str = self.tokenizer.decode(chosen_tokens.unsqueeze(0), skip_special_tokens=True)[0]
-            rejected_str = self.tokenizer.decode(rejected_tokens.unsqueeze(0), skip_special_tokens=True)[0]
-            
-            samples.append({
-                "chosen_tokens": chosen_tokens,
-                "rejected_tokens": rejected_tokens,
-                "chosen_str": chosen_str,
-                "rejected_str": rejected_str,
-                "chosen_mask": c_mask,
-                "rejected_mask": r_mask,
-            })
-        
+
+            chosen_str = self.tokenizer.decode(
+                chosen_tokens.unsqueeze(0), skip_special_tokens=True
+            )[0]
+            rejected_str = self.tokenizer.decode(
+                rejected_tokens.unsqueeze(0), skip_special_tokens=True
+            )[0]
+
+            samples.append(
+                {
+                    "chosen_tokens": chosen_tokens,
+                    "rejected_tokens": rejected_tokens,
+                    "chosen_str": chosen_str,
+                    "rejected_str": rejected_str,
+                    "chosen_mask": c_mask,
+                    "rejected_mask": r_mask,
+                }
+            )
+
         return samples
