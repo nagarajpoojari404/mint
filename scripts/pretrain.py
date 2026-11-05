@@ -65,7 +65,7 @@ def main() -> None:
         logger.info(f"Model parameters: {model.get_num_params():,}")
         model = device.move_to_device(model, from_meta=True)
     else:
-        model = Gemma(config.model)
+        model = Gemma(config.model, gradient_checkpointing=config.train.gradient_checkpointing)
         logger.info(f"Model parameters: {model.get_num_params():,}")
         model = device.move_to_device(model, from_meta=False)
 

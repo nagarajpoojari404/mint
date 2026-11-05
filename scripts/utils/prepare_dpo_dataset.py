@@ -1,5 +1,6 @@
 import re
 import json
+from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel
 from datasets import load_dataset
@@ -37,9 +38,10 @@ def main():
     dataset = load_dataset("anthropic/hh-rlhf", split="train[:1000]")
 
     output_filename = "data/dpo/hh_rlhf_formatted.jsonl"
+    Path(output_filename).parent.mkdir(parents=True, exist_ok=True)
     print(f"Processing and writing rows to {output_filename}...")
 
-    with open(output_filename, "w", encoding="utf-8") as f:
+    with open(output_filename, "x", encoding="utf-8") as f:
         for item in dataset:
             full_chosen_seq = parse_anthropic_chat(item["chosen"])
             full_rejected_seq = parse_anthropic_chat(item["rejected"])
