@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -14,6 +15,7 @@ class Task(Enum):
     LM = "language_modeling"
 
 
+@dataclass
 class EvalConfig(Config):
     seq_length: int = 512
     max_new_tokens: int = 256
@@ -21,7 +23,7 @@ class EvalConfig(Config):
 
 class Evaluator(ABC):
     def __init__(self, model: nn.Module, config: EvalConfig, device: Device) -> None:
-        self.model = model
+        self.model: Any = model
         self.config = config
         self.device = device
         self.process_info = device.process_info()

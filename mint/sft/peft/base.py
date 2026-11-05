@@ -1,13 +1,11 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 from torch import nn
 
 
 class Adapter(ABC):
+    @classmethod
     @abstractmethod
-    def __init__(self) -> None:
-        pass
-
-    @abstractmethod
-    def apply(self, model: nn.Module, **kwargs) -> None:  # noqa: ANN003
+    def apply(cls, model: nn.Module, **kwargs: Any) -> None:  # noqa: ANN401
         pass

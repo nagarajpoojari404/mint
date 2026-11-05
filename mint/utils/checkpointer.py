@@ -126,7 +126,7 @@ class Checkpointer:
             logger.warning(f"Checkpoint not found: {path}")
             return {"step": 0, "dataloader_state": {}}
 
-        logger.info(f"oading checkpoint from {path}")
+        logger.info(f"Loading checkpoint from {path}")
         checkpoint = torch.load(path, map_location="cpu")
 
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -162,7 +162,7 @@ class Checkpointer:
             logger.warning(f"Checkpoint not found: {path}")
             return {"step": 0, "dataloader_state": {}}
 
-        logger.info(f"oading checkpoint from {path}")
+        logger.info(f"Loading checkpoint from {path}")
         checkpoint = torch.load(path, map_location="cpu")
 
         model.load_state_dict(checkpoint["model_state_dict"])

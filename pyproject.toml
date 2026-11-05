@@ -61,8 +61,7 @@ exclude = [
     "archive/",
     "experiments/",
     "tests/",
-    "scripts",
-    "kernels",
+    "kernels_",
     "wandb/",
     "*.pyc",
 ]
@@ -110,10 +109,9 @@ ignore = [
     "D104",     # Missing docstring in public package
     "D105",     # Missing docstring in magic method
     "D107",     # Missing docstring in __init__
-    "ANN101",   # Missing type annotation for self
-    "ANN102",   # Missing type annotation for cls
     "S101",     # Use of assert detected (common in tests)
     "PLR0913",  # Too many arguments
+    "PLR0917",  # Too many positional arguments
     "PLR2004",  # Magic value used in comparison
     "T201",     # print found (allow for debugging)
     "TRY003",   # Avoid specifying long messages outside exception class

@@ -27,8 +27,8 @@ class FlashAttention(nn.Module):
         causal: bool = False,
         window_size: tuple[int, int] = (-1, -1),
         kv_cache: KVCache | None = None,
-        base_attn_mask: torch.Tensor = None,
-        doc_ids: torch.Tensor = None,
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if kv_cache is None:
             return self._attention(
@@ -68,9 +68,7 @@ class FlashAttention(nn.Module):
             if major != 9:
                 return None
             os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-            from kernels_ import (
-                get_kernel,  # pyright: ignore[reportMissingImports]
-            )
+            from kernels import get_kernel  # type: ignore[import-not-found] # noqa: PLC0415
 
             return get_kernel("varunneal/flash-attention-3").flash_attn_interface
         except Exception:
@@ -92,8 +90,8 @@ class FlashAttention(nn.Module):
         *,
         causal: bool,
         window_size: tuple[int, int],
-        base_attn_mask: torch.Tensor = None,
-        doc_ids: torch.Tensor = None,
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if doc_ids is not None:
             try:
@@ -180,8 +178,8 @@ class FlashAttention(nn.Module):
         *,
         causal: bool,
         window_size: tuple[int, int],
-        base_attn_mask: torch.Tensor = None,
-        doc_ids: torch.Tensor = None,
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         k_cache, v_cache, cache_seqlens = kv_cache.get_cache_tensors()
 
@@ -227,8 +225,8 @@ class FlashAttention(nn.Module):
         causal: bool,
         window_size: tuple[int, int],
         enable_gqa: bool,
-        base_attn_mask: torch.Tensor = None,
-        doc_ids: torch.Tensor = None,
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         q_len = q.size(2)
         k_len = k.size(2)

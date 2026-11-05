@@ -1,10 +1,5 @@
-from abc import ABC
-
 import torch
 from torch import nn
-
-
-class Norm(nn.Module, ABC): ...
 
 
 class RMSNorm(nn.Module):
@@ -14,14 +9,17 @@ class RMSNorm(nn.Module):
         self.scale = nn.Parameter(torch.zeros(emb_dim))
         self.shift = nn.Parameter(torch.zeros(emb_dim)) if bias else None
 
-    def forward(self, x: torch.Tensor):  # noqa: ANN201
-        input_dtype = x.dtype
+    def reset_parameters(self) -> None:
+        nn.init.zeros_(self.scale)
+        if self.shift is not None:
+            nn.init.zeros_(self.shift)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_f = x.float()
-        var = x_f.pow(2).mean(dim=-1, keepdim=True)
-        x_norm = x_f * torch.rsqrt(var + self.eps)
+        x_norm = x_f * torch.rsqrt(x_f.pow(2).mean(dim=-1, keepdim=True) + self.eps)
         out = x_norm * (1.0 + self.scale.float())
 
         if self.shift is not None:
             out = out + self.shift.float()
 
-        return out.to(input_dtype)
+        return out.to(x.dtype)

@@ -1,10 +1,10 @@
 import copy
 from abc import ABC, abstractmethod
 from typing import Any
-from typing_extensions import deprecated
 
 import tiktoken
 import torch
+from typing_extensions import deprecated
 
 
 class Tokenizer(ABC):
@@ -249,7 +249,7 @@ class TikTokenizer(Tokenizer):
         mask = mask[:max_tokens]
         return ids, mask
 
-@DeprecationWarning
+@deprecated("Use TikTokenizer instead")
 class HFTokenizer(Tokenizer):
     """HuggingFace tokenizer wrapper."""
 

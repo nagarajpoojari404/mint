@@ -1,5 +1,5 @@
 import random
-from collections.abc import Generator
+from collections.abc import Iterator
 
 import torch
 
@@ -72,7 +72,7 @@ class DistributedSFTDataloader(DistributedDataloader):
         self,
         split: str = "train",  # noqa: ARG002
         resume_state: dict | None = None,  # noqa: ARG002
-    ) -> Generator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]]:
         idx = 0
         total = len(self.rank_indices)
 
@@ -99,14 +99,13 @@ class DistributedSFTDataloader(DistributedDataloader):
             self.gpu_buffer.copy_(self.cpu_buffer, non_blocking=self.device.is_cuda)
             self.mask.copy_(self.cpu_mask, non_blocking=self.device.is_cuda)
 
-            # doc_ids irrelevent here
             yield self.inputs, self.targets, self.mask, None
 
     def get_state(self) -> dict:
-        raise NotImplementedError  # TODO: implement resume state for SFT
+        return {}
 
-    def set_state(self, state: dict) -> None:  # noqa: ARG002
-        raise NotImplementedError
+    def set_state(self, state: dict) -> None:
+        pass
 
     def sample(self, num_samples: int = 1):  # noqa: ANN201
         samples = []

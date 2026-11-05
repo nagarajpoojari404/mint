@@ -85,7 +85,8 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
             if self.max_shards_to_wait > 0 and len(shards) >= self.max_shards_to_wait:
                 if self.rank == 0:
                     logger.info(
-                        f"✓ Reached max shard limit ({self.max_shards_to_wait}). Proceeding with {len(shards)} shards."
+                        f"✓ Reached max shard limit ({self.max_shards_to_wait}). "
+                        f"Proceeding with {len(shards)} shards."
                     )
                 return
 
@@ -135,7 +136,7 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
                 if self.max_shards_to_wait > 0:
                     if self.rank == 0:
                         logger.info(
-                            f"No shards available and max limit ({self.max_shards_to_wait}) reached. Stopping."
+                            f"No shards available and max limit ({self.max_shards_to_wait}) reached."
                         )
                     break
 
@@ -208,7 +209,8 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
                 except StopIteration:
                     if self.rank == 0:
                         logger.warning(
-                            f"Reached end of data while skipping batches. Skipped {_} of {batches_to_skip}"
+                            f"Reached end of data while skipping batches. "
+                            f"Skipped {_} of {batches_to_skip}"
                         )
                     break
             if self.rank == 0:
@@ -251,7 +253,7 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
                             doc[:remaining], dtype=torch.long
                         )
 
-                        self.row_doc_ids[row_idx, pos : pos + doc_len] = global_doc_id
+                        self.row_doc_ids[row_idx, pos : pos + remaining] = global_doc_id
                         global_doc_id += 1
 
                         pos += remaining

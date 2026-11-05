@@ -60,8 +60,8 @@ class SFTTrainer(BaseTrainer):
                 datasets=eval_datasets,
             )
 
-            if config.ckpt.resume_from_checkpoint:
-                self._load_pretrained_checkpoint()
+        if config.ckpt.resume_from_checkpoint:
+            self._load_pretrained_checkpoint()
 
     def _load_pretrained_checkpoint(self) -> None:
         checkpoint_info = self.checkpointer.load_checkpoint(
@@ -91,14 +91,14 @@ class SFTTrainer(BaseTrainer):
 
         logger.info("Starting SFT training from step 0")
 
-    def _validate_batch(self, inputs: torch.Tensor, targets: torch.Tensor, step: int) -> None:
+    def _validate_batch(self, inputs: torch.Tensor, targets: torch.Tensor, step: int) -> None:  # noqa: ARG002
         if torch.isnan(inputs).any():
             logger.error(f"NaN detected in inputs at step {step}")
         if torch.isinf(inputs).any():
             logger.error(f"Inf detected in inputs at step {step}")
 
     def _forward_pass(
-        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
+        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None  # noqa: ARG002
     ) -> torch.Tensor:
         logits = self.model(inputs)
 
@@ -227,7 +227,7 @@ class HFSFTTrainer(SFTTrainer):
         )
 
     def _forward_pass(
-        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
+        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None  # noqa: ARG002
     ) -> torch.Tensor:
         return self.model(input_ids=inputs)
 

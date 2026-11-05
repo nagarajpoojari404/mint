@@ -325,9 +325,12 @@ class DistMuonAdamW(Optimizer):
         for info in gather_list:
             info["future"].wait()
             if info["params"] is not None:
-                torch._foreach_copy_(
-                    info["params"], list(info["stacked_params"][: len(info["params"])].unbind(0))
-                )
+                for p, src in zip(
+                    info["params"],
+                    info["stacked_params"][: len(info["params"])].unbind(0),
+                    strict=False,
+                ):
+                    p.copy_(src)
 
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:  # type: ignore[override]

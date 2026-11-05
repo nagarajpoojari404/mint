@@ -95,7 +95,7 @@ class DPOTrainer(BaseTrainer):
     def _validate_batch(self, inputs: torch.Tensor, targets: torch.Tensor, step: int) -> None: ...
 
     def _forward_pass(
-        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
+        self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None  # noqa: ARG002
     ) -> torch.Tensor:
         return self.model(inputs)
 
@@ -172,22 +172,20 @@ class DPOTrainer(BaseTrainer):
 
             logger.debug(f"{'=' * 80}\n")
 
-    def _compute_loss(
+    def _compute_dpo_loss(
         self,
         concat_ids: torch.Tensor,
-        concat_mask: torch.Tensor,
+        concat_mask: torch.Tensor,  # noqa: ARG002
         c_labels: torch.Tensor,
         r_labels: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict]:
         policy_logits = self.policy_model(concat_ids)
 
-        # split back into chosen and rejected chunks
         p_chosen_logits, p_rejected_logits = policy_logits.chunk(2, dim=0)
 
         p_chosen_logps = compute_logps(p_chosen_logits, c_labels)
         p_rejected_logps = compute_logps(p_rejected_logits, r_labels)
 
-        # forward pass through reference model (No grads needed)
         with torch.no_grad():
             ref_logits = self.reference_model(concat_ids)
 
@@ -196,7 +194,6 @@ class DPOTrainer(BaseTrainer):
             ref_chosen_logps = compute_logps(r_chosen_logits, c_labels)
             ref_rejected_logps = compute_logps(r_rejected_logits, r_labels)
 
-        # evaluate DPO Engine loss metrics
         loss, metrics = self.criterion(
             p_chosen_logps, p_rejected_logps, ref_chosen_logps, ref_rejected_logps
         )
@@ -243,7 +240,7 @@ class DPOTrainer(BaseTrainer):
 
             is_accumulating = (micro_step + 1) % self.config.gradient_accumulation_steps != 0
 
-            loss, metrics = self._compute_loss(concat_ids, concat_mask, c_labels, r_labels)
+            loss, metrics = self._compute_dpo_loss(concat_ids, concat_mask, c_labels, r_labels)
 
             self.device.backward(loss)
             accumulated_loss += loss.item()

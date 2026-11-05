@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -54,6 +55,7 @@ class BaseTrainer:
         self.device = device
         self.config = config
         self.tokenizer = tokenizer
+        self.scheduler: Any = None
         self.process_info = self.device.process_info()
         self.is_main_process = self.process_info["is_main"]
         self.wandb_run = self._init_wandb()
@@ -126,7 +128,7 @@ class BaseTrainer:
         self, _micro_step: int, step: int, scheduler_metrics: dict | None = None
     ) -> dict:
         if scheduler_metrics is None:
-            if not hasattr(self, "scheduler"):
+            if self.scheduler is None:
                 raise AttributeError("Scheduler not initialized")
             scheduler_metrics = self.scheduler.step(self.optimizer, step)
 
@@ -137,7 +139,7 @@ class BaseTrainer:
         )
         self.device.synchronize()
 
-        return scheduler_metrics
+        return scheduler_metrics or {}
 
     def _calculate_step_metrics(
         self,
@@ -161,7 +163,7 @@ class BaseTrainer:
             "scheduler/muon_weight_decay": scheduler_metrics["muon_weight_decay"],
         }
 
-    def _handle_interrupt(self, step: int, checkpointer: Any) -> bool:  # noqa: ANN401
+    def _handle_interrupt(self, step: int, checkpointer: Checkpointer) -> bool:
         if checkpointer.interrupt_requested:
             if self.is_main_process:
                 logger.warning("Saving checkpoint due to keyboard interrupt...")
@@ -210,7 +212,7 @@ class BaseTrainer:
                 force=force,
             )
 
-    def _finalize_training(self, step: int, checkpointer: Any) -> None:  # noqa: ANN401
+    def _finalize_training(self, step: int, checkpointer: Checkpointer) -> None:
         if self.is_main_process:
             logger.info("Saving final checkpoint")
             checkpointer.save_checkpoint(
@@ -224,7 +226,7 @@ class BaseTrainer:
         if self.wandb_run is not None:
             self.wandb_run.finish()
 
-    def _log_sample_predictions(self, step: int, num_samples: int = 3) -> None:
+    def _log_sample_predictions(self, step: int, num_samples: int = 3) -> None:  # noqa: ARG002
         if not self.is_main_process or not self.tokenizer:
             return
 

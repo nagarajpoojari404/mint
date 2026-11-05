@@ -68,7 +68,7 @@ class SpellingBee(SFTTrainDataset, SFTEvalDataset):
 
         cache_path = "/tmp/words_alpha.txt"  # noqa: S108
         if not Path(cache_path).exists():
-            urllib.request.urlretrieve(WORD_LIST_URL, cache_path)  # noqa: S310
+            urllib.request.urlretrieve(WORD_LIST_URL, cache_path)
 
         with Path(cache_path).open() as f:
             return [line.strip() for line in f]
@@ -135,7 +135,7 @@ class SimpleSpelling(SFTTrainDataset):
 
         cache_path = "/tmp/words_alpha.txt"  # noqa: S108
         if not Path(cache_path).exists():
-            urllib.request.urlretrieve(WORD_LIST_URL, cache_path)  # noqa: S310
+            urllib.request.urlretrieve(WORD_LIST_URL, cache_path)
 
         with Path(cache_path).open() as f:
             words = [line.strip() for line in f]

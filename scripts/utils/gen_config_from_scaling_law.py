@@ -189,7 +189,7 @@ def calculate_optimal_depth_from_flops(
     return best_depth
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--depth-ref", type=int, default=12)
     parser.add_argument("--depth-target", type=int, default=None)
@@ -265,3 +265,7 @@ if __name__ == "__main__":
     output_file = args.output or f"config_d{depth_target}.yaml"
     generate_config_yaml(result, output_file)
     print(f"\nConfig saved to: {output_file}")
+
+
+if __name__ == "__main__":
+    main()

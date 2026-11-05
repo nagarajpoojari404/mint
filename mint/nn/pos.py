@@ -6,9 +6,6 @@ from torch import nn
 
 
 class PosEmbeddings(nn.Module, ABC):
-    def __init__(self) -> None:
-        super().__init__()
-
     @abstractmethod
     def forward(
         self, q: torch.Tensor, k: torch.Tensor, start_pos: int
@@ -30,22 +27,14 @@ class SinusoidalPosEmbeddings(PosEmbeddings):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
 
-        pe = pe[None, :, None, :]
-
-        self.register_buffer("pe", pe, persistent=False)
+        self.register_buffer("pe", pe[None, :, None, :], persistent=False)
         self.pe: torch.Tensor
 
     def forward(
         self, q: torch.Tensor, k: torch.Tensor, start_pos: int = 0
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-        seqlen = q.shape[1]
-
-        pe_slice = self.pe[:, start_pos : start_pos + seqlen, :, :].to(q.dtype)
-
-        q_out = q + pe_slice
-        k_out = k + pe_slice
-
-        return q_out, k_out, None
+        pe_slice = self.pe[:, start_pos : start_pos + q.shape[1]].to(q.dtype)
+        return q + pe_slice, k + pe_slice, None
 
 
 class RoPE(PosEmbeddings):
@@ -55,64 +44,55 @@ class RoPE(PosEmbeddings):
         head_dim: int,
         rope_base_theta: int = 100000,
         dtype: torch.dtype = torch.float32,
+        scale_factor: float = 1.0,
     ) -> None:
         super().__init__()
+        self.seq_len = seq_len
+        self.head_dim = head_dim
+        self.base = rope_base_theta
+        self.dtype = dtype
+        self.scale_factor = scale_factor
 
-        cos, sin = self._precompute_rotary_embeddings(
-            seq_len, head_dim, rope_base_theta, dtype=dtype
-        )
-        # Registering as buffers ensures they are moved to the correct device
-        # alongside the model but are not treated as trainable parameters.
+        cos, sin = self._precompute_rotary_embeddings()
+        # buffers follow the model across devices but are not trainable
         self.register_buffer("cos", cos, persistent=False)
         self.register_buffer("sin", sin, persistent=False)
         self.cos: torch.Tensor
         self.sin: torch.Tensor
 
-    def _precompute_rotary_embeddings(
-        self,
-        seq_len: int,
-        head_dim: int,
-        base: int,
-        device: torch.device = None,
-        dtype: torch.dtype = torch.float32,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32)
-        inv_freq = 1.0 / (base ** (channel_range / head_dim))
+    def reset_parameters(self) -> None:
+        cos, sin = self._precompute_rotary_embeddings()
+        self.cos.copy_(cos)
+        self.sin.copy_(sin)
 
-        t = torch.arange(seq_len, dtype=torch.float32, device=device)
+    def _precompute_rotary_embeddings(self) -> tuple[torch.Tensor, torch.Tensor]:
+        channel_range = torch.arange(0, self.head_dim, 2, dtype=torch.float32)
+        inv_freq = 1.0 / (self.base ** (channel_range / self.head_dim))
+
+        t = torch.arange(self.seq_len, dtype=torch.float32) / self.scale_factor
         freqs = torch.outer(t, inv_freq)
 
-        cos, sin = freqs.cos(), freqs.sin()
-        cos, sin = cos.to(dtype), sin.to(dtype)
-        cos, sin = cos[None, :, None, :], sin[None, :, None, :]
-        return cos, sin
+        cos, sin = freqs.cos().to(self.dtype), freqs.sin().to(self.dtype)
+        return cos[None, :, None, :], sin[None, :, None, :]
 
-    def _apply_rotary_embs(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> torch.Tensor:
+    @staticmethod
+    def _apply_rotary_embs(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         d = x.shape[-1] // 2
         x1, x2 = x[..., :d], x[..., d:]
-
-        y1 = x1 * cos - x2 * sin
-        y2 = x1 * sin + x2 * cos
-        return torch.cat([y1, y2], dim=-1)
+        return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
 
     def forward(
         self, q: torch.Tensor, k: torch.Tensor, start_pos: int = 0
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        seqlen = q.shape[1]
-
-        # Slice the precomputed embeddings to match the current sequence length
-        cos = self.cos[:, start_pos : start_pos + seqlen, :, :].to(q.dtype)
-        sin = self.sin[:, start_pos : start_pos + seqlen, :, :].to(q.dtype)
-
-        q_out = self._apply_rotary_embs(q, cos, sin)
-        k_out = self._apply_rotary_embs(k, cos, sin)
-
-        return q_out, k_out, None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        end_pos = start_pos + q.shape[1]
+        cos = self.cos[:, start_pos:end_pos].to(q.dtype)
+        sin = self.sin[:, start_pos:end_pos].to(q.dtype)
+        return self._apply_rotary_embs(q, cos, sin), self._apply_rotary_embs(k, cos, sin), None
 
 
 class LinearScaledRoPE(RoPE):
+    """RoPE with positions interpolated by ``1 / scale_factor`` to extend the context window."""
+
     def __init__(
         self,
         seq_len: int,
@@ -121,41 +101,13 @@ class LinearScaledRoPE(RoPE):
         rope_base_theta: int = 100000,
         dtype: torch.dtype = torch.float32,
     ) -> None:
-        self.scale_factor = scale_factor
-        super().__init__(seq_len, head_dim, rope_base_theta, dtype)
-
-    def _precompute_rotary_embeddings(
-        self,
-        seq_len: int,
-        head_dim: int,
-        base: int,
-        device: torch.device = None,
-        dtype: torch.dtype = torch.float32,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32)
-        inv_freq = 1.0 / (base ** (channel_range / head_dim))
-
-        # scale the absolute pos index by a scaling factor
-        # why ?: imagine initially model is trained on seq_len=512 with RoPE, now
-        # i want to train for 4k, model struggles to understand fequencies of pos beyond 512.
-        # we can scale down those pos to smaller interpolated values
-        t = torch.arange(seq_len, dtype=torch.float32, device=device) / self.scale_factor
-        freqs = torch.outer(t, inv_freq)
-
-        cos, sin = freqs.cos(), freqs.sin()
-        cos, sin = cos.to(dtype), sin.to(dtype)
-        cos, sin = cos[None, :, None, :], sin[None, :, None, :]
-        return cos, sin
+        super().__init__(seq_len, head_dim, rope_base_theta, dtype, scale_factor=scale_factor)
 
 
 class NoPE(PosEmbeddings):
-    def __init__(self) -> None:
-        super().__init__()
-
-    @abstractmethod
     def forward(
-        self, q: torch.Tensor, k: torch.Tensor, start_pos: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, q: torch.Tensor, k: torch.Tensor, start_pos: int = 0  # noqa: ARG002
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         return q, k, None
 
 
@@ -164,19 +116,16 @@ class ALiBiPositionalBias(PosEmbeddings):
         super().__init__()
         self.n_heads = n_heads
         slopes = torch.tensor(self._get_slopes(n_heads))
-
-        # .  Shape: [1, n_heads, 1, 1]
         self.register_buffer("slopes", slopes[None, :, None, None], persistent=False)
+        self.slopes: torch.Tensor
 
-    def _get_slopes(self, n_heads: int):  # noqa: ANN202
-        def get_slopes_power_of_2(n_heads: int) -> list:
-            start = 2 ** (-(2 ** -(math.log2(n_heads) - 3)))
-            ratio = start
-            return [start * (ratio**i) for i in range(n_heads)]
+    def _get_slopes(self, n_heads: int) -> list[float]:
+        def get_slopes_power_of_2(n: int) -> list[float]:
+            start = 2 ** (-(2 ** -(math.log2(n) - 3)))
+            return [start * (start**i) for i in range(n)]
 
         if math.log2(n_heads).is_integer():
             return get_slopes_power_of_2(n_heads)
-        # should handle non-power-of-2 head counts gracefully
         closest_power_of_2 = 2 ** math.floor(math.log2(n_heads))
         return (
             get_slopes_power_of_2(closest_power_of_2)
@@ -187,21 +136,12 @@ class ALiBiPositionalBias(PosEmbeddings):
         self, q: torch.Tensor, k: torch.Tensor, start_pos: int = 0
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         seq_len_q = q.shape[1]
-
         total_kv_len = start_pos + seq_len_q
 
-        # query positions on the global timeline: [seq_len_q, 1]
-        q_idx = torch.arange(start_pos, start_pos + seq_len_q, device=q.device)[:, None]
+        q_idx = torch.arange(start_pos, total_kv_len, device=q.device)[:, None]
+        k_idx = torch.arange(total_kv_len, device=k.device)[None, :]
 
-        # key positions spanning from the beginning of time: [1, total_kv_len]
-        k_idx = torch.arange(0, total_kv_len, device=k.device)[None, :]
-
-        # causal relative distance calculation: [seq_len_q, total_kv_len]
-        # In causal sequences, keys occur before or at the query index (k_idx <= q_idx).
-        # (k_idx - q_idx) naturally yields negative values or zero, perfect for a penalty.
+        # keys at or before the query give a zero/negative distance, i.e. a penalty
         relative_position = k_idx - q_idx
-
-        # multiply positive head-slopes by negative distances: [1, n_heads, seq_len_q, total_kv_len]
         alibi_bias = self.slopes * relative_position[None, None, :, :]
-
         return q, k, alibi_bias.to(q.dtype)

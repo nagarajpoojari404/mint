@@ -60,8 +60,6 @@ class ChatCoreEvaluator(Evaluator):
         for idx in range(rank, total, world_size):
             conversation = dataset[idx]
             completion = self._generate_completion(conversation)
-            print("*" * 50)
-            print(completion)
             if dataset.evaluate(conversation, completion):
                 correct += 1
             count += 1

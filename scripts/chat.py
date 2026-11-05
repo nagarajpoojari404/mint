@@ -1,5 +1,6 @@
 import argparse
 import sys
+from typing import Any
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -45,7 +46,7 @@ def main() -> None:
 
     print(f"Loading {args.model_name} …")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
+    model: Any = AutoModelForCausalLM.from_pretrained(
         args.model_name, trust_remote_code=True, device_map="auto"
     )
     model.eval()
