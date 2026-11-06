@@ -3,7 +3,7 @@ name = "goda"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "nagarajpoojari@ibm.com",email = "nagaraj.poojari@ibm.com"}
+    {name = "nagarajpoojari404",email = "nagarajpoojari2003@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -23,6 +23,7 @@ dependencies = [
     "transformers>=5.12.1",
     "accelerate>=1.14.0",
     "torchinfo>=1.8.0",
+    "kaggle>=2.2.5",
 ]
 
 
