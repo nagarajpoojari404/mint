@@ -1,10 +1,10 @@
 [model]
-embed_dim = 64
+embed_dim = 128
 hidden_dim = 128
-seq_length = 64
+seq_length = 128
 vocab_size = 50267
-n_layers = 4
-n_heads = 2
+n_layers = 8
+n_heads = 8
 n_kv_heads = 2
 head_dim = 64
 rope_base_theta = 100000
@@ -64,13 +64,13 @@ schedule_wait = 3
 schedule_warmup = 2
 schedule_active = 10
 schedule_repeat = 0
-record_shapes = false
+record_shapes = true
 profile_memory = true
 with_stack = false
-with_flops = false
+with_flops = true
 activities = ["cpu", "cuda"]
 trace_prefix = "trace"
-run_name = ""
+run_name = "latest_v1"
 
 [optim]
 muon_momentum = 0.95
@@ -90,4 +90,4 @@ data_dir = "data/climbmix"
 batch_size = 64
 buffer_size = 1000
 tokenizer_batch_size = 128
-seq_length = 64
+seq_length = 128

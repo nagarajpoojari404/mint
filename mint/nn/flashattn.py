@@ -10,6 +10,10 @@ from kernels_ import (
 )
 from mint.kvcache.base import KVCache
 
+try:
+    from flash_attn import flash_attn_varlen_func  # type: ignore
+except ImportError:
+    flash_attn_varlen_func = None
 
 class FlashAttention(nn.Module):
     def __init__(self, *, use_custom_fa: bool = True) -> None:
@@ -93,46 +97,41 @@ class FlashAttention(nn.Module):
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if doc_ids is not None:
-            try:
-                from flash_attn import flash_attn_varlen_func  # type: ignore # noqa: PLC0415
+        # Falls through to SDPA if flash_attn is not installed
+        if doc_ids is not None and flash_attn_varlen_func is not None:
+            B, T, H, D = q.shape
+            _, _, H_k, _ = k.shape
 
-                B, T, H, D = q.shape
-                _, _, H_k, _ = k.shape
+            # FlashAttention varlen expects flattened sequences: (total_tokens, H, D)
+            q_flat = q.reshape(-1, H, D)
+            k_flat = k.reshape(-1, H_k, D)
+            v_flat = v.reshape(-1, H_k, D)
 
-                # FlashAttention varlen expects flattened sequences: (total_tokens, H, D)
-                q_flat = q.reshape(-1, H, D)
-                k_flat = k.reshape(-1, H_k, D)
-                v_flat = v.reshape(-1, H_k, D)
+            # Calculate consecutive document lengths across the flattened batch
+            flat_doc_ids = doc_ids.reshape(-1)
+            _, counts = torch.unique_consecutive(flat_doc_ids, return_counts=True)
 
-                # Calculate consecutive document lengths across the flattened batch
-                flat_doc_ids = doc_ids.reshape(-1)
-                _, counts = torch.unique_consecutive(flat_doc_ids, return_counts=True)
+            # Compute cumulative sequence lengths (must be int32 for FA kernels)
+            cu_seqlens = torch.cat(
+                [
+                    torch.tensor([0], dtype=torch.int32, device=q.device),
+                    torch.cumsum(counts, dim=0, dtype=torch.int32),
+                ]
+            )
+            max_seqlen = int(counts.max().item())
 
-                # Compute cumulative sequence lengths (must be int32 for FA kernels)
-                cu_seqlens = torch.cat(
-                    [
-                        torch.tensor([0], dtype=torch.int32, device=q.device),
-                        torch.cumsum(counts, dim=0, dtype=torch.int32),
-                    ]
-                )
-                max_seqlen = int(counts.max().item())
-
-                out_flat = flash_attn_varlen_func(
-                    q_flat,
-                    k_flat,
-                    v_flat,
-                    cu_seqlens_q=cu_seqlens,
-                    cu_seqlens_k=cu_seqlens,
-                    max_seqlen_q=max_seqlen,
-                    max_seqlen_k=max_seqlen,
-                    causal=causal,
-                    window_size=window_size,
-                )
-                return out_flat.reshape(B, T, H, D)
-            except ImportError:
-                # Fall through to SDPA if flash_attn is not installed
-                pass
+            out_flat = flash_attn_varlen_func(
+                q_flat,
+                k_flat,
+                v_flat,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_k=cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_k=max_seqlen,
+                causal=causal,
+                window_size=window_size,
+            )
+            return out_flat.reshape(B, T, H, D)
 
         if self._use_custom_fa(q) and window_size == (-1, -1) and q.shape[2] == k.shape[2]:
             custom_fa = self._custom_fa
@@ -230,6 +229,15 @@ class FlashAttention(nn.Module):
     ) -> torch.Tensor:
         q_len = q.size(2)
         k_len = k.size(2)
+
+        # Some torch builds reject enable_gqa for the fused (mem-efficient/flash) backends and
+        # silently fall back to the math kernel. Expanding K/V to the query head count keeps the
+        # fused backends eligible. Skipped for single-token decode to avoid copying the KV cache.
+        if enable_gqa and q_len > 1:
+            n_rep = q.size(1) // k.size(1)
+            k = k.repeat_interleave(n_rep, dim=1)
+            v = v.repeat_interleave(n_rep, dim=1)
+            enable_gqa = False
 
         # Build document-boundary attention mask from doc_ids if available
         mask = None
