@@ -19,6 +19,7 @@ class DeviceConfig(Config):
 
 class Device:
     def __init__(self, config: DeviceConfig) -> None:
+        self._init_distributed()
         self.device = self._detect()
         self.type = self.device.type
 
@@ -33,9 +34,18 @@ class Device:
         self._setup(config)
         logger.warning(f"training with autocast: {self.use_amp} with {self.amp_dtype}")
 
+    @staticmethod
+    def _init_distributed() -> None:
+        # torchrun sets WORLD_SIZE/RANK/LOCAL_RANK; plain `python` runs stay single-process.
+        if int(os.getenv("WORLD_SIZE", "1")) <= 1 or dist.is_initialized():
+            return
+        if torch.cuda.is_available():
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
+
     def _detect(self) -> torch.device:
         if torch.cuda.is_available():
-            return torch.device("cuda")
+            return torch.device("cuda", torch.cuda.current_device())
         if torch.backends.mps.is_available():
             return torch.device("mps")
         return torch.device("cpu")

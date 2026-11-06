@@ -2,6 +2,7 @@ import argparse
 from dataclasses import dataclass
 
 import torch
+import torch.distributed as dist
 from torch import nn
 
 from mint.config.base import Config
@@ -56,6 +57,8 @@ def main() -> None:
         )
 
     device = Device(config.device)
+    # Same seed on every rank => identical initial weights (the optimizer only syncs grads/updates).
+    torch.manual_seed(1337)
 
     model: nn.Module
     if config.train.use_meta_device:
@@ -107,6 +110,9 @@ def main() -> None:
 
     # LoRA().apply(model=model, target_modules=[], r=8, alpha=16)  # noqa: ERA001
     trainer.train()
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

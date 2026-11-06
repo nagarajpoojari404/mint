@@ -8,7 +8,7 @@ from mint.kvcache.base import KVCache
 from mint.nn.base import ModelConfig
 from mint.nn.blocks import GQAGluBlock
 from mint.nn.norm import RMSNorm
-from mint.optim.muon_adamw import MuonAdamW, MuonAdamWConfig
+from mint.optim.dist.muon_adamw import DistMuonAdamW, MuonAdamWConfig
 from mint.trainer.scheduler import SchedulerConfig
 from mint.utils.logger import logger
 
@@ -167,7 +167,7 @@ def configure_optimizer(
     model_cfg: GemmaConfig,
     sched_cfg: SchedulerConfig,
     optim_cfg: MuonAdamWConfig,
-) -> MuonAdamW:
+) -> DistMuonAdamW:
     params: dict[str, list[nn.Parameter]] = {
         "lm_head": [],
         "embedding": [],
@@ -232,4 +232,4 @@ def configure_optimizer(
             }
         )
 
-    return MuonAdamW(param_groups)
+    return DistMuonAdamW(param_groups)

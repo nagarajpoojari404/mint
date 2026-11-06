@@ -219,13 +219,14 @@ class BaseTrainer:
 
     def _handle_interrupt(self, step: int, checkpointer: Checkpointer) -> bool:
         if checkpointer.interrupt_requested:
+            dataloader_state = self._get_dataloader_state()  # collective: all ranks must call
             if self.is_main_process:
                 logger.warning("Saving checkpoint due to keyboard interrupt...")
                 checkpointer.save_checkpoint(
                     step=step,
                     model=self.model,
                     optimizer=self.optimizer,
-                    dataloader_state=self._get_dataloader_state(),
+                    dataloader_state=dataloader_state,
                     force=True,
                 )
                 logger.info("Checkpoint saved. Exiting gracefully.")
@@ -250,30 +251,31 @@ class BaseTrainer:
         *,
         force: bool = False,
     ) -> None:
-        if not self.is_main_process:
-            return
-
         if force or (
             self.config.ckpt.save_checkpoint_every_n_steps is not None
             and step % self.config.ckpt.save_checkpoint_every_n_steps == 0
             and step > 0
         ):
+            dataloader_state = self._get_dataloader_state()  # collective: all ranks must call
+            if not self.is_main_process:
+                return
             checkpointer.save_checkpoint(
                 step=step,
                 model=self.model,
                 optimizer=self.optimizer,
-                dataloader_state=self._get_dataloader_state(),
+                dataloader_state=dataloader_state,
                 force=force,
             )
 
     def _finalize_training(self, step: int, checkpointer: Checkpointer) -> None:
+        dataloader_state = self._get_dataloader_state()  # collective: all ranks must call
         if self.is_main_process:
             logger.info("Saving final checkpoint")
             checkpointer.save_checkpoint(
                 step=step,
                 model=self.model,
                 optimizer=self.optimizer,
-                dataloader_state=self._get_dataloader_state(),
+                dataloader_state=dataloader_state,
                 force=True,
             )
 
