@@ -208,7 +208,7 @@ class PreTrainer(BaseTrainer):
                 loss = self._compute_loss(inputs, targets, loss_mask, step, doc_ids)
 
                 self.device.backward(loss)
-                accumulated_loss += loss.item()
+                accumulated_loss += loss.detach()  # stays on device: no per-micro-step sync
                 micro_step += 1
 
                 if not is_accumulating:
@@ -217,10 +217,8 @@ class PreTrainer(BaseTrainer):
                     scheduler_metrics = self.scheduler.step(self.optimizer, step)
                     self._perform_optimization_step(micro_step, step, scheduler_metrics)
 
-                    # Clear cache periodically to reduce fragmentation
-                    if step % 10 == 0:
-                        self.device.empty_cache()
-
+                    # Single host sync per optimizer step (also makes step_time accurate)
+                    accumulated_loss = float(accumulated_loss)
                     step_time = time.perf_counter() - step_start_time
                     tokens_per_step = (
                         targets.numel()
