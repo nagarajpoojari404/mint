@@ -41,6 +41,19 @@ class BasetrainConfig(Config):
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
 
+def _masked_cross_entropy(
+    logits: torch.Tensor, targets: torch.Tensor, loss_mask: torch.Tensor
+) -> torch.Tensor:
+    loss = nn.functional.cross_entropy(
+        logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
+    )
+
+    # Branch-free (no tensor truthiness => no GPU sync). An all-zero mask yields loss 0.
+    mask_sum = loss_mask.sum().float()
+    masked_loss = (loss * loss_mask.view(-1).float()).sum()
+    return masked_loss / mask_sum.clamp(min=1.0)
+
+
 class BaseTrainer:
     def __init__(
         self,
@@ -57,6 +70,12 @@ class BaseTrainer:
         self.device = device
         self.config = config
         self.tokenizer = tokenizer
+        # Compiled so the vocab-sized cast / log-softmax / masked reduction fuse into few kernels.
+        self._masked_cross_entropy = (
+            torch.compile(_masked_cross_entropy)
+            if config.compile_model and device.is_cuda
+            else _masked_cross_entropy
+        )
         self.scheduler: Any = None
         self.process_info = self.device.process_info()
         self.is_main_process = self.process_info["is_main"]
@@ -112,14 +131,7 @@ class BaseTrainer:
 
         with self.device.autocast():
             logits = self._forward_pass(inputs, doc_ids)
-            loss = nn.functional.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
-            )
-
-            # Branch-free (no tensor truthiness => no GPU sync). An all-zero mask yields loss 0.
-            mask_sum = loss_mask.sum().float()
-            masked_loss = (loss * loss_mask.view(-1).float()).sum()
-            loss = masked_loss / mask_sum.clamp(min=1.0)
+            loss = self._masked_cross_entropy(logits, targets, loss_mask)
 
             return loss / self.config.gradient_accumulation_steps
 

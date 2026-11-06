@@ -1,4 +1,6 @@
+import queue
 import random
+import threading
 import time
 from collections.abc import Generator, Iterator
 
@@ -50,16 +52,7 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
         self._refresh_shard_lists()
 
         self.row_capacity = self.T + 1
-        use_cuda: bool = device.is_cuda
-
-        self.row_buffer = torch.empty((self.B, self.row_capacity), dtype=torch.long)
-        self.row_doc_ids = torch.empty((self.B, self.row_capacity), dtype=torch.long)
-
-        # CPU pinned memory layout
-        self.cpu_inputs = torch.empty((self.B, self.T), dtype=torch.long, pin_memory=use_cuda)
-        self.cpu_targets = torch.empty((self.B, self.T), dtype=torch.long, pin_memory=use_cuda)
-        self.cpu_loss_mask = torch.empty((self.B, self.T), dtype=torch.float32, pin_memory=use_cuda)
-        self.cpu_doc_ids = torch.empty((self.B, self.T), dtype=torch.long, pin_memory=use_cuda)
+        self.prefetch_depth = 2
 
         # GPU Destination tensors
         self.inputs = torch.empty((self.B, self.T), dtype=torch.long, device=device.device)
@@ -180,9 +173,14 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
         )
         doc_buffer.extend(token_lists)
 
-    def batch_loader(  # noqa: PLR0912, PLR0915
-        self, split: str = "train", resume_state: dict | None = None
+    def _cpu_batches(  # noqa: PLR0912, PLR0915
+        self, split: str, resume_state: dict | None
     ) -> Generator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        use_cuda = self.device.is_cuda
+        # Local to this generator so concurrent train/val loaders never share scratch space.
+        row_buffer = torch.empty((self.B, self.row_capacity), dtype=torch.long)
+        row_doc_ids = torch.empty((self.B, self.row_capacity), dtype=torch.long)
+
         # Restore state if resuming
         if resume_state and split == "train":
             start_shard_idx = resume_state.get("shard_idx", 0)
@@ -238,39 +236,92 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
                     if best_idx >= 0:
                         doc = doc_buffer.pop(best_idx)
                         doc_len = len(doc)
-                        self.row_buffer[row_idx, pos : pos + doc_len] = torch.tensor(
+                        row_buffer[row_idx, pos : pos + doc_len] = torch.tensor(
                             doc, dtype=torch.long
                         )
 
-                        self.row_doc_ids[row_idx, pos : pos + doc_len] = global_doc_id
+                        row_doc_ids[row_idx, pos : pos + doc_len] = global_doc_id
                         global_doc_id += 1
 
                         pos += doc_len
                     else:
                         shortest_idx = min(range(len(doc_buffer)), key=lambda i: len(doc_buffer[i]))
                         doc = doc_buffer.pop(shortest_idx)
-                        self.row_buffer[row_idx, pos : pos + remaining] = torch.tensor(
+                        row_buffer[row_idx, pos : pos + remaining] = torch.tensor(
                             doc[:remaining], dtype=torch.long
                         )
 
-                        self.row_doc_ids[row_idx, pos : pos + remaining] = global_doc_id
+                        row_doc_ids[row_idx, pos : pos + remaining] = global_doc_id
                         global_doc_id += 1
 
                         pos += remaining
 
-            self.cpu_inputs.copy_(self.row_buffer[:, :-1])
-            self.cpu_targets.copy_(self.row_buffer[:, 1:])
+            # Fresh pinned tensors per batch: PyTorch's pinned allocator will not reuse a block
+            # until the async H2D copy that read it has finished, so queued batches are safe.
+            cpu_inputs = torch.empty((self.B, self.T), dtype=torch.long, pin_memory=use_cuda)
+            cpu_targets = torch.empty((self.B, self.T), dtype=torch.long, pin_memory=use_cuda)
+            cpu_loss_mask = torch.empty((self.B, self.T), dtype=torch.float32, pin_memory=use_cuda)
+            cpu_doc_ids = torch.empty((self.B, self.T), dtype=torch.long, pin_memory=use_cuda)
 
-            input_doc_ids = self.row_doc_ids[:, :-1]
-            target_doc_ids = self.row_doc_ids[:, 1:]
+            cpu_inputs.copy_(row_buffer[:, :-1])
+            cpu_targets.copy_(row_buffer[:, 1:])
 
-            self.cpu_loss_mask.copy_(input_doc_ids == target_doc_ids)
-            self.cpu_doc_ids.copy_(input_doc_ids)
+            input_doc_ids = row_doc_ids[:, :-1]
+            target_doc_ids = row_doc_ids[:, 1:]
 
-            self.inputs.copy_(self.cpu_inputs, non_blocking=self.device.is_cuda)
-            self.targets.copy_(self.cpu_targets, non_blocking=self.device.is_cuda)
-            self.doc_ids.copy_(self.cpu_doc_ids, non_blocking=self.device.is_cuda)
-            self.loss_mask.copy_(self.cpu_loss_mask, non_blocking=self.device.is_cuda)
+            cpu_loss_mask.copy_(input_doc_ids == target_doc_ids)
+            cpu_doc_ids.copy_(input_doc_ids)
+
+            yield cpu_inputs, cpu_targets, cpu_loss_mask, cpu_doc_ids
+
+    def _prefetch(self, source: Iterator, depth: int) -> Generator:
+        """Run `source` in a background thread so CPU batch building overlaps GPU compute."""
+        buf: queue.Queue = queue.Queue(maxsize=depth)
+        stop = threading.Event()
+        done = object()
+
+        def put(item: object) -> bool:
+            while not stop.is_set():
+                try:
+                    buf.put(item, timeout=0.1)
+                except queue.Full:
+                    continue
+                return True
+            return False
+
+        def worker() -> None:
+            try:
+                for item in source:
+                    if not put(item):
+                        return
+                put(done)
+            except BaseException as e:  # noqa: BLE001
+                put(e)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        try:
+            while True:
+                item = buf.get()
+                if item is done:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            stop.set()
+
+    def batch_loader(
+        self, split: str = "train", resume_state: dict | None = None
+    ) -> Generator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        non_blocking = self.device.is_cuda
+        for cpu_inputs, cpu_targets, cpu_loss_mask, cpu_doc_ids in self._prefetch(
+            self._cpu_batches(split, resume_state), self.prefetch_depth
+        ):
+            self.inputs.copy_(cpu_inputs, non_blocking=non_blocking)
+            self.targets.copy_(cpu_targets, non_blocking=non_blocking)
+            self.doc_ids.copy_(cpu_doc_ids, non_blocking=non_blocking)
+            self.loss_mask.copy_(cpu_loss_mask, non_blocking=non_blocking)
 
             yield self.inputs, self.targets, self.loss_mask, self.doc_ids
 
