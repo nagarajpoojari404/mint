@@ -22,7 +22,7 @@ log_every_n_steps = 1
 eval_every_n_steps = 100
 eval_num_steps = 10
 core_eval_every_n_step = 500
-gradient_accumulation_steps = 2
+gradient_accumulation_steps = 8
 
 [train.lg]
 wandb_enabled = false
@@ -65,11 +65,12 @@ schedule_warmup = 2
 schedule_active = 10
 schedule_repeat = 0
 record_shapes = false
-profile_memory = false
+profile_memory = true
 with_stack = false
 with_flops = false
 activities = ["cpu", "cuda"]
 trace_prefix = "trace"
+run_name = ""
 
 [optim]
 muon_momentum = 0.95
@@ -86,7 +87,7 @@ mixed_precision = true
 
 [dl]
 data_dir = "data/climbmix"
-batch_size = 128
-buffer_size = 200
+batch_size = 64
+buffer_size = 1000
 tokenizer_batch_size = 128
 seq_length = 64
