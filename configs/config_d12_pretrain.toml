@@ -26,9 +26,9 @@ core_eval_every_n_step = 500
 gradient_accumulation_steps = 8
 
 [train.lg]
-wandb_enabled = false
+wandb_enabled = true
 wandb_project = "mint"
-wandb_run_name = ""
+wandb_run_name = "56M-T4-v1"
 wandb_entity = ""
 
 
