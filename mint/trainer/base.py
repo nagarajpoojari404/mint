@@ -15,6 +15,7 @@ from mint.trainer.scheduler import SchedulerConfig
 from mint.utils.checkpointer import Checkpointer, CheckpointerConfig
 from mint.utils.device import Device
 from mint.utils.logger import LoggerConfig, logger
+from mint.utils.profiler import ProfilerConfig
 
 
 @dataclass
@@ -37,6 +38,7 @@ class BasetrainConfig(Config):
     sched: SchedulerConfig = field(default_factory=SchedulerConfig)
     lg: LoggerConfig = field(default_factory=LoggerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
+    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
 
 class BaseTrainer:

@@ -1,5 +1,5 @@
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -16,10 +16,12 @@ from mint.trainer.scheduler import Scheduler
 from mint.utils.checkpointer import Checkpointer
 from mint.utils.device import Device
 from mint.utils.logger import logger
+from mint.utils.profiler import ProfilerConfig, TorchProfiler
 
 
 @dataclass
-class PretrainConfig(BasetrainConfig): ...
+class PretrainConfig(BasetrainConfig):
+    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
 
 class PreTrainer(BaseTrainer):
@@ -68,6 +70,8 @@ class PreTrainer(BaseTrainer):
         self.start_step = 0
         if config.ckpt.resume_from_checkpoint:
             self._load_pretrained_checkpoint()
+
+        self.profiler = TorchProfiler(config.profiler)
 
     def _load_pretrained_checkpoint(self) -> None:
         checkpoint_info = self.checkpointer.load_checkpoint(
@@ -184,76 +188,80 @@ class PreTrainer(BaseTrainer):
 
         step_start_time = time.perf_counter()
 
-        for inputs, targets, loss_mask, doc_ids in batch_iterator:
-            # Calculate current step for interrupt check (before increment)
-            step = micro_step // self.config.gradient_accumulation_steps
-
-            if (
-                self._handle_interrupt(step, self.checkpointer)
-                or step >= self.config.train_num_steps
-            ):
-                break
-
-            if micro_step % self.config.gradient_accumulation_steps == 0:
-                step_start_time = time.perf_counter()
-            if micro_step % self.config.gradient_accumulation_steps == 0:
-                self.optimizer.zero_grad()
-
-            is_accumulating = (micro_step + 1) % self.config.gradient_accumulation_steps != 0
-            loss = self._compute_loss(inputs, targets, loss_mask, step, doc_ids)
-
-            self.device.backward(loss)
-            accumulated_loss += loss.item()
-            micro_step += 1
-
-            if not is_accumulating:
-                # Calculate step after completing gradient accumulation
+        with self.profiler:
+            for inputs, targets, loss_mask, doc_ids in batch_iterator:
+                # Calculate current step for interrupt check (before increment)
                 step = micro_step // self.config.gradient_accumulation_steps
-                scheduler_metrics = self.scheduler.step(self.optimizer, step)
-                self._perform_optimization_step(micro_step, step, scheduler_metrics)
 
-                # Clear cache periodically to reduce fragmentation
-                if step % 10 == 0:
-                    self.device.empty_cache()
+                if (
+                    self._handle_interrupt(step, self.checkpointer)
+                    or step >= self.config.train_num_steps
+                ):
+                    break
 
-                step_time = time.perf_counter() - step_start_time
-                tokens_per_step = (
-                    targets.numel()
-                    * self.process_info["world_size"]
-                    * self.config.gradient_accumulation_steps
-                )
+                if micro_step % self.config.gradient_accumulation_steps == 0:
+                    step_start_time = time.perf_counter()
+                if micro_step % self.config.gradient_accumulation_steps == 0:
+                    self.optimizer.zero_grad()
 
-                metrics = self._calculate_step_metrics(
-                    accumulated_loss,
-                    step_time,
-                    tokens_per_step,
-                    scheduler_metrics,
-                    train_start_time,
-                )
+                is_accumulating = (micro_step + 1) % self.config.gradient_accumulation_steps != 0
+                loss = self._compute_loss(inputs, targets, loss_mask, step, doc_ids)
 
-                if step % self.config.eval_every_n_steps == 0 and step > 0:
-                    self._run_evaluation(
-                        evaluator=self.bpb_evaluator,
-                        step=step,
-                        metric_prefix="val",
-                        save_checkpoint=True,
-                        num_steps=self.config.eval_num_steps,
-                    )
-                    self._log_sample_predictions(step)
+                self.device.backward(loss)
+                accumulated_loss += loss.item()
+                micro_step += 1
 
-                if step % self.config.core_eval_every_n_step == 0 and step > 0:
-                    self._run_evaluation(
-                        evaluator=self.core_evaluator,
-                        step=step,
-                        metric_prefix="core",
-                        task_labels=["hellaswag_zeroshot"],
-                        limit=1,
+                if not is_accumulating:
+                    # Calculate step after completing gradient accumulation
+                    step = micro_step // self.config.gradient_accumulation_steps
+                    scheduler_metrics = self.scheduler.step(self.optimizer, step)
+                    self._perform_optimization_step(micro_step, step, scheduler_metrics)
+
+                    # Clear cache periodically to reduce fragmentation
+                    if step % 10 == 0:
+                        self.device.empty_cache()
+
+                    step_time = time.perf_counter() - step_start_time
+                    tokens_per_step = (
+                        targets.numel()
+                        * self.process_info["world_size"]
+                        * self.config.gradient_accumulation_steps
                     )
 
-                self._maybe_save_checkpoint(step, self.checkpointer)
-                self._log_training_progress(step, metrics)
+                    metrics = self._calculate_step_metrics(
+                        accumulated_loss,
+                        step_time,
+                        tokens_per_step,
+                        scheduler_metrics,
+                        train_start_time,
+                    )
 
-                accumulated_loss = 0.0
+                    if step % self.config.eval_every_n_steps == 0 and step > 0:
+                        self._run_evaluation(
+                            evaluator=self.bpb_evaluator,
+                            step=step,
+                            metric_prefix="val",
+                            save_checkpoint=True,
+                            num_steps=self.config.eval_num_steps,
+                        )
+                        self._log_sample_predictions(step)
+
+                    if step % self.config.core_eval_every_n_step == 0 and step > 0:
+                        self._run_evaluation(
+                            evaluator=self.core_evaluator,
+                            step=step,
+                            metric_prefix="core",
+                            task_labels=["hellaswag_zeroshot"],
+                            limit=1,
+                        )
+
+                    self._maybe_save_checkpoint(step, self.checkpointer)
+                    self._log_training_progress(step, metrics)
+
+                    # Advance profiler schedule once per optimizer step
+                    self.profiler.step()
+
+                    accumulated_loss = 0.0
 
         final_step = micro_step // self.config.gradient_accumulation_steps
         self._finalize_training(final_step, self.checkpointer)

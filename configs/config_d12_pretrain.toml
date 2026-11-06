@@ -57,6 +57,19 @@ weight_decay_embedding = 0.001
 weight_decay_scalar = 0.05
 scalar_lr_multiplier = 0.01
 
+[train.profiler]
+enabled = true
+output_dir = "./profiles"
+schedule_wait = 1
+schedule_warmup = 1
+schedule_active = 3
+schedule_repeat = 0
+record_shapes = true
+profile_memory = true
+with_stack = false
+with_flops = true
+activities = ["cpu", "cuda"]
+trace_prefix = "trace"
 
 [optim]
 muon_momentum = 0.95
