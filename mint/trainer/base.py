@@ -1,8 +1,12 @@
 import importlib
 import importlib.util
+import netrc
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import torch
 from torch import nn
@@ -41,6 +45,45 @@ class BasetrainConfig(Config):
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
 
+def _wandb_has_credentials() -> bool:
+    if os.environ.get("WANDB_API_KEY") or os.environ.get("WANDB_IDENTITY_TOKEN_FILE"):
+        return True
+    path = Path(os.environ["NETRC"]).expanduser() if os.environ.get("NETRC") else None
+    if path is None:
+        path = next(
+            (p for p in (Path("~/.netrc").expanduser(), Path("~/_netrc").expanduser()) if p.exists()),
+            Path("~/.netrc").expanduser(),
+        )
+    netloc = urlsplit(os.environ.get("WANDB_BASE_URL", "https://api.wandb.ai")).netloc
+    try:
+        creds = netrc.netrc(path).authenticators(netloc)
+    except (OSError, netrc.NetrcParseError):
+        return False
+    return bool(creds and creds[2])
+
+
+def _masked_cross_entropy(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor,
+    vocab_size: int | None = None,
+) -> torch.Tensor:
+    # Excludes padded vocab columns (if any) by masking them to -inf rather than slicing: a slice's
+    # backward materializes a zero-padded copy of the full-size gradient as a separate kernel,
+    # while masked_fill's backward is pointwise and can fuse into log_softmax's backward.
+    if vocab_size is not None and logits.size(-1) > vocab_size:
+        cols = torch.arange(logits.size(-1), device=logits.device)
+        logits = logits.masked_fill(cols >= vocab_size, float("-inf"))
+    loss = nn.functional.cross_entropy(
+        logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
+    )
+
+    # Branch-free (no tensor truthiness => no GPU sync). An all-zero mask yields loss 0.
+    mask_sum = loss_mask.sum().float()
+    masked_loss = (loss * loss_mask.view(-1).float()).sum()
+    return masked_loss / mask_sum.clamp(min=1.0)
+
+
 class BaseTrainer:
     def __init__(
         self,
@@ -57,6 +100,18 @@ class BaseTrainer:
         self.device = device
         self.config = config
         self.tokenizer = tokenizer
+        # Compiled so the vocab-sized cast / log-softmax / masked reduction fuse into few kernels.
+        self._masked_cross_entropy = (
+            torch.compile(_masked_cross_entropy)
+            if config.compile_model and device.is_cuda
+            else _masked_cross_entropy
+        )
+        model_cfg = getattr(model, "config", None)
+        # Only set for models that pad the vocab; the loss then slices the padded columns itself.
+        self._pads_vocab = getattr(model_cfg, "pad_vocab_multiple", 1) > 1
+        self._loss_vocab_size: int | None = (
+            model_cfg.vocab_size if self._pads_vocab else None  # type: ignore[union-attr]
+        )
         self.scheduler: Any = None
         self.process_info = self.device.process_info()
         self.is_main_process = self.process_info["is_main"]
@@ -70,6 +125,13 @@ class BaseTrainer:
             raise ImportError("wandb is enabled in config but the package is not installed.")
 
         wandb = __import__("wandb")
+
+        if not os.environ.get("WANDB_MODE") and not _wandb_has_credentials():
+            logger.warning(
+                "No W&B credentials found (set WANDB_API_KEY or run `wandb login`); "
+                "logging offline. Sync later with `wandb sync wandb/offline-run-*`."
+            )
+            os.environ["WANDB_MODE"] = "offline"
 
         run = wandb.init(
             project=self.config.lg.wandb_project,
@@ -96,9 +158,10 @@ class BaseTrainer:
     def _forward_pass(
         self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
     ) -> torch.Tensor:
+        extra = {"unpad_logits": False} if self._pads_vocab else {}
         if doc_ids is not None:
-            return self.model(inputs, doc_ids=doc_ids)
-        return self.model(inputs)
+            return self.model(inputs, doc_ids=doc_ids, **extra)
+        return self.model(inputs, **extra)
 
     def _compute_loss(
         self,
@@ -112,14 +175,7 @@ class BaseTrainer:
 
         with self.device.autocast():
             logits = self._forward_pass(inputs, doc_ids)
-            loss = nn.functional.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
-            )
-
-            # Branch-free (no tensor truthiness => no GPU sync). An all-zero mask yields loss 0.
-            mask_sum = loss_mask.sum().float()
-            masked_loss = (loss * loss_mask.view(-1).float()).sum()
-            loss = masked_loss / mask_sum.clamp(min=1.0)
+            loss = self._masked_cross_entropy(logits, targets, loss_mask, self._loss_vocab_size)
 
             return loss / self.config.gradient_accumulation_steps
 

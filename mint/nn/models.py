@@ -26,6 +26,10 @@ class GemmaConfig(ModelConfig):
     head_dim: int = 128
     rope_base_theta: int = 100000
     tie_weights: bool = True
+    # Round the embedding / lm_head rows up to a multiple of this (e.g. 64) so the output GEMM is
+    # aligned for tensor cores. Logits are sliced back to vocab_size. 1 disables padding.
+    # Changes parameter shapes, so checkpoints are not interchangeable across values.
+    pad_vocab_multiple: int = 1
 
 
 class Gemma(nn.Module):
@@ -34,7 +38,11 @@ class Gemma(nn.Module):
         self.config = config
         self.gradient_checkpointing = gradient_checkpointing
 
-        self.tok_embeddings = nn.Embedding(config.vocab_size, config.embed_dim, dtype=config.dtype)
+        m = config.pad_vocab_multiple
+        self.padded_vocab_size = (config.vocab_size + m - 1) // m * m
+        self.tok_embeddings = nn.Embedding(
+            self.padded_vocab_size, config.embed_dim, dtype=config.dtype
+        )
 
         # alternate short-range ('S') and long-range ('L') attention
         self.blocks = nn.ModuleList(
@@ -53,7 +61,9 @@ class Gemma(nn.Module):
         )
 
         self.norm = RMSNorm(config.embed_dim)
-        self.output = nn.Linear(config.embed_dim, config.vocab_size, bias=False, dtype=config.dtype)
+        self.output = nn.Linear(
+            config.embed_dim, self.padded_vocab_size, bias=False, dtype=config.dtype
+        )
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -68,6 +78,7 @@ class Gemma(nn.Module):
         start_pos: int = 0,
         doc_ids: torch.Tensor | None = None,
         attn_mask: torch.Tensor | None = None,
+        unpad_logits: bool = True,
     ) -> torch.Tensor:
         h = self.tok_embeddings(input_ids)
 
@@ -84,7 +95,12 @@ class Gemma(nn.Module):
             else:
                 h = block(h, **kwargs)
 
-        return self.output(self.norm(h))
+        logits = self.output(self.norm(h))
+        # Training passes unpad_logits=False and slices inside the compiled loss instead, so the
+        # slice fuses with log_softmax rather than materializing a copy across the compile boundary.
+        if unpad_logits and self.padded_vocab_size != self.config.vocab_size:
+            logits = logits[..., : self.config.vocab_size]
+        return logits
 
     @torch.no_grad()
     def generate(

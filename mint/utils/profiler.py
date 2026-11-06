@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -29,6 +30,7 @@ class ProfilerConfig(Config):
     activities: list[str] = field(default_factory=lambda: ["cpu", "cuda"])
 
     trace_prefix: str = "trace"
+    run_name: str = ""   # traces go to <output_dir>/<run_name>; empty = timestamp
 
 
 class TorchProfiler:
@@ -70,9 +72,9 @@ class TorchProfiler:
             elif act == "cuda" and torch.cuda.is_available():
                 activities.append(tp.ProfilerActivity.CUDA)
 
-        out = Path(self.config.output_dir)
+        run_name = self.config.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
+        out = Path(self.config.output_dir) / run_name
         out.mkdir(parents=True, exist_ok=True)
-        prefix = str(out / self.config.trace_prefix)
 
         return tp.profile(
             activities=activities,
@@ -82,7 +84,7 @@ class TorchProfiler:
                 active=self.config.schedule_active,
                 repeat=self.config.schedule_repeat,
             ),
-            on_trace_ready=tp.tensorboard_trace_handler(prefix),
+            on_trace_ready=tp.tensorboard_trace_handler(str(out), worker_name=self.config.trace_prefix),
             record_shapes=self.config.record_shapes,
             profile_memory=self.config.profile_memory,
             with_stack=self.config.with_stack,

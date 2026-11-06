@@ -62,11 +62,17 @@ def main() -> None:
         logger.info("Initializing model on meta device...")
         with torch.device("meta"):
             model = Gemma(config.model, gradient_checkpointing=config.train.gradient_checkpointing)
-        logger.info(f"Model parameters: {model.get_num_params():,}")
+        logger.info(
+            f"Model parameters: {model.get_num_params():,} non-embedding | "
+            f"{model.get_num_params(non_embedding=False):,} total"
+        )
         model = device.move_to_device(model, from_meta=True)
     else:
         model = Gemma(config.model, gradient_checkpointing=config.train.gradient_checkpointing)
-        logger.info(f"Model parameters: {model.get_num_params():,}")
+        logger.info(
+            f"Model parameters: {model.get_num_params():,} non-embedding | "
+            f"{model.get_num_params(non_embedding=False):,} total"
+        )
         model = device.move_to_device(model, from_meta=False)
 
     if config.train.compile_model:

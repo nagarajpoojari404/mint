@@ -1,14 +1,15 @@
 [model]
-embed_dim = 64
-hidden_dim = 128
-seq_length = 64
+embed_dim = 512
+hidden_dim = 2048
+seq_length = 128
 vocab_size = 50267
-n_layers = 4
-n_heads = 2
+n_layers = 8
+n_heads = 8
 n_kv_heads = 2
 head_dim = 64
 rope_base_theta = 100000
 tie_weights = true
+pad_vocab_multiple = 64
 
 
 
@@ -25,9 +26,9 @@ core_eval_every_n_step = 500
 gradient_accumulation_steps = 8
 
 [train.lg]
-wandb_enabled = false
+wandb_enabled = true
 wandb_project = "mint"
-wandb_run_name = ""
+wandb_run_name = "56M-T4-v1"
 wandb_entity = ""
 
 
@@ -64,12 +65,13 @@ schedule_wait = 3
 schedule_warmup = 2
 schedule_active = 10
 schedule_repeat = 0
-record_shapes = false
-profile_memory = false
+record_shapes = true
+profile_memory = true
 with_stack = false
-with_flops = false
+with_flops = true
 activities = ["cpu", "cuda"]
 trace_prefix = "trace"
+run_name = "d512_h2048_L8_bs64"
 
 [optim]
 muon_momentum = 0.95
@@ -86,7 +88,7 @@ mixed_precision = true
 
 [dl]
 data_dir = "data/climbmix"
-batch_size = 32
+batch_size = 64
 buffer_size = 1000
 tokenizer_batch_size = 128
-seq_length = 64
+seq_length = 128
