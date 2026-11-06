@@ -6,11 +6,12 @@ from pathlib import Path
 import torch
 import torch.profiler as tp
 
+from mint.config.base import Config
 from mint.utils.logger import logger
 
 
 @dataclass
-class ProfilerConfig:
+class ProfilerConfig(Config):
     enabled: bool = False
 
     output_dir: str = "./profiles"

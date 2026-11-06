@@ -116,13 +116,10 @@ class BaseTrainer:
                 logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
             )
 
-            mask_sum = loss_mask.sum()
-            if mask_sum > 0:
-                masked_loss = (loss * loss_mask.view(-1).float()).sum()
-                loss = masked_loss / mask_sum.float()
-            else:
-                logger.warning(f"Zero mask sum at step {step}, skipping batch")
-                loss = torch.tensor(0.0, device=self.device.device, dtype=torch.float32)
+            # Branch-free (no tensor truthiness => no GPU sync). An all-zero mask yields loss 0.
+            mask_sum = loss_mask.sum().float()
+            masked_loss = (loss * loss_mask.view(-1).float()).sum()
+            loss = masked_loss / mask_sum.clamp(min=1.0)
 
             return loss / self.config.gradient_accumulation_steps
 
@@ -139,7 +136,6 @@ class BaseTrainer:
             grad_clip=self.config.grad_clip,
             params=self.model.parameters(),
         )
-        self.device.synchronize()
 
         return scheduler_metrics or {}
 

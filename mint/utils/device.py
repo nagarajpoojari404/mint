@@ -43,7 +43,8 @@ class Device:
     def _get_amp_dtype(self) -> torch.dtype | None:
         if not self.use_amp:
             return None
-        if self.is_cuda and torch.cuda.is_bf16_supported():
+        # bf16 is only native on Ampere+ (sm80); Turing/Volta emulate it slowly -> use fp16 + GradScaler
+        if self.is_cuda and torch.cuda.get_device_capability()[0] >= 8:
             return torch.bfloat16
         return torch.float16
 

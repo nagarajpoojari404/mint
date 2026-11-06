@@ -1,12 +1,12 @@
 [model]
-embed_dim = 512
-hidden_dim = 2048
-seq_length = 512
+embed_dim = 64
+hidden_dim = 128
+seq_length = 64
 vocab_size = 50267
-n_layers = 2
-n_heads = 4
-n_kv_heads = 4
-head_dim = 128
+n_layers = 4
+n_heads = 2
+n_kv_heads = 2
+head_dim = 64
 rope_base_theta = 100000
 tie_weights = true
 
@@ -15,8 +15,8 @@ tie_weights = true
 [train]
 mixed_precision = true
 use_meta_device = true
-compile_model = false
-train_num_steps = 10
+compile_model = true
+train_num_steps = 50
 grad_clip = 1.2
 log_every_n_steps = 1
 eval_every_n_steps = 100
@@ -25,8 +25,8 @@ core_eval_every_n_step = 500
 gradient_accumulation_steps = 8
 
 [train.lg]
-wandb_enabled = true
-wandb_project = "goda"
+wandb_enabled = false
+wandb_project = "mint"
 wandb_run_name = ""
 wandb_entity = ""
 
@@ -60,14 +60,14 @@ scalar_lr_multiplier = 0.01
 [train.profiler]
 enabled = true
 output_dir = "./profiles"
-schedule_wait = 1
-schedule_warmup = 1
-schedule_active = 3
+schedule_wait = 3
+schedule_warmup = 2
+schedule_active = 10
 schedule_repeat = 0
-record_shapes = true
-profile_memory = true
+record_shapes = false
+profile_memory = false
 with_stack = false
-with_flops = true
+with_flops = false
 activities = ["cpu", "cuda"]
 trace_prefix = "trace"
 
@@ -82,11 +82,11 @@ adamw_beta2_scalar = 0.95
 adamw_eps = 1.0e-10
 
 [device]
-mixed_precision = false
+mixed_precision = true
 
 [dl]
 data_dir = "data/climbmix"
-batch_size = 64
+batch_size = 32
 buffer_size = 1000
 tokenizer_batch_size = 128
-seq_length = 128
+seq_length = 64
