@@ -42,8 +42,14 @@ class BasetrainConfig(Config):
 
 
 def _masked_cross_entropy(
-    logits: torch.Tensor, targets: torch.Tensor, loss_mask: torch.Tensor
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor,
+    vocab_size: int | None = None,
 ) -> torch.Tensor:
+    # Drops padded vocab columns (if any) here so the slice fuses into the loss kernels.
+    if vocab_size is not None and logits.size(-1) > vocab_size:
+        logits = logits[..., :vocab_size]
     loss = nn.functional.cross_entropy(
         logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
     )
@@ -75,6 +81,12 @@ class BaseTrainer:
             torch.compile(_masked_cross_entropy)
             if config.compile_model and device.is_cuda
             else _masked_cross_entropy
+        )
+        model_cfg = getattr(model, "config", None)
+        # Only set for models that pad the vocab; the loss then slices the padded columns itself.
+        self._pads_vocab = getattr(model_cfg, "pad_vocab_multiple", 1) > 1
+        self._loss_vocab_size: int | None = (
+            model_cfg.vocab_size if self._pads_vocab else None  # type: ignore[union-attr]
         )
         self.scheduler: Any = None
         self.process_info = self.device.process_info()
@@ -115,9 +127,10 @@ class BaseTrainer:
     def _forward_pass(
         self, inputs: torch.Tensor, doc_ids: torch.Tensor | None = None
     ) -> torch.Tensor:
+        extra = {"unpad_logits": False} if self._pads_vocab else {}
         if doc_ids is not None:
-            return self.model(inputs, doc_ids=doc_ids)
-        return self.model(inputs)
+            return self.model(inputs, doc_ids=doc_ids, **extra)
+        return self.model(inputs, **extra)
 
     def _compute_loss(
         self,
@@ -131,7 +144,7 @@ class BaseTrainer:
 
         with self.device.autocast():
             logits = self._forward_pass(inputs, doc_ids)
-            loss = self._masked_cross_entropy(logits, targets, loss_mask)
+            loss = self._masked_cross_entropy(logits, targets, loss_mask, self._loss_vocab_size)
 
             return loss / self.config.gradient_accumulation_steps
 

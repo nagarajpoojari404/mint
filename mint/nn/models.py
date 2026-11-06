@@ -78,6 +78,7 @@ class Gemma(nn.Module):
         start_pos: int = 0,
         doc_ids: torch.Tensor | None = None,
         attn_mask: torch.Tensor | None = None,
+        unpad_logits: bool = True,
     ) -> torch.Tensor:
         h = self.tok_embeddings(input_ids)
 
@@ -95,7 +96,9 @@ class Gemma(nn.Module):
                 h = block(h, **kwargs)
 
         logits = self.output(self.norm(h))
-        if self.padded_vocab_size != self.config.vocab_size:
+        # Training passes unpad_logits=False and slices inside the compiled loss instead, so the
+        # slice fuses with log_softmax rather than materializing a copy across the compile boundary.
+        if unpad_logits and self.padded_vocab_size != self.config.vocab_size:
             logits = logits[..., : self.config.vocab_size]
         return logits
 
