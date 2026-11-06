@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -84,7 +85,9 @@ class TorchProfiler:
                 active=self.config.schedule_active,
                 repeat=self.config.schedule_repeat,
             ),
-            on_trace_ready=tp.tensorboard_trace_handler(str(out), worker_name=self.config.trace_prefix),
+            on_trace_ready=tp.tensorboard_trace_handler(
+                str(out), worker_name=f"{self.config.trace_prefix}_rank{os.getenv('RANK', '0')}"
+            ),
             record_shapes=self.config.record_shapes,
             profile_memory=self.config.profile_memory,
             with_stack=self.config.with_stack,
