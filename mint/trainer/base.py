@@ -1,8 +1,12 @@
 import importlib
 import importlib.util
+import netrc
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import torch
 from torch import nn
@@ -39,6 +43,23 @@ class BasetrainConfig(Config):
     lg: LoggerConfig = field(default_factory=LoggerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
+
+
+def _wandb_has_credentials() -> bool:
+    if os.environ.get("WANDB_API_KEY") or os.environ.get("WANDB_IDENTITY_TOKEN_FILE"):
+        return True
+    path = Path(os.environ["NETRC"]).expanduser() if os.environ.get("NETRC") else None
+    if path is None:
+        path = next(
+            (p for p in (Path("~/.netrc").expanduser(), Path("~/_netrc").expanduser()) if p.exists()),
+            Path("~/.netrc").expanduser(),
+        )
+    netloc = urlsplit(os.environ.get("WANDB_BASE_URL", "https://api.wandb.ai")).netloc
+    try:
+        creds = netrc.netrc(path).authenticators(netloc)
+    except (OSError, netrc.NetrcParseError):
+        return False
+    return bool(creds and creds[2])
 
 
 def _masked_cross_entropy(
@@ -104,6 +125,13 @@ class BaseTrainer:
             raise ImportError("wandb is enabled in config but the package is not installed.")
 
         wandb = __import__("wandb")
+
+        if not os.environ.get("WANDB_MODE") and not _wandb_has_credentials():
+            logger.warning(
+                "No W&B credentials found (set WANDB_API_KEY or run `wandb login`); "
+                "logging offline. Sync later with `wandb sync wandb/offline-run-*`."
+            )
+            os.environ["WANDB_MODE"] = "offline"
 
         run = wandb.init(
             project=self.config.lg.wandb_project,
