@@ -47,9 +47,12 @@ def _masked_cross_entropy(
     loss_mask: torch.Tensor,
     vocab_size: int | None = None,
 ) -> torch.Tensor:
-    # Drops padded vocab columns (if any) here so the slice fuses into the loss kernels.
+    # Excludes padded vocab columns (if any) by masking them to -inf rather than slicing: a slice's
+    # backward materializes a zero-padded copy of the full-size gradient as a separate kernel,
+    # while masked_fill's backward is pointwise and can fuse into log_softmax's backward.
     if vocab_size is not None and logits.size(-1) > vocab_size:
-        logits = logits[..., :vocab_size]
+        cols = torch.arange(logits.size(-1), device=logits.device)
+        logits = logits.masked_fill(cols >= vocab_size, float("-inf"))
     loss = nn.functional.cross_entropy(
         logits.view(-1, logits.size(-1)), targets.view(-1), reduction="none"
     )

@@ -71,7 +71,7 @@ with_stack = false
 with_flops = true
 activities = ["cpu", "cuda"]
 trace_prefix = "trace"
-run_name = "vocabpad_bs128_fusedslice"
+run_name = "vocabpad_bs128_maskfill"
 
 [optim]
 muon_momentum = 0.95
