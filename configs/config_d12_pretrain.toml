@@ -9,6 +9,7 @@ n_kv_heads = 2
 head_dim = 64
 rope_base_theta = 100000
 tie_weights = true
+pad_vocab_multiple = 64
 
 
 
@@ -22,7 +23,7 @@ log_every_n_steps = 1
 eval_every_n_steps = 100
 eval_num_steps = 10
 core_eval_every_n_step = 500
-gradient_accumulation_steps = 8
+gradient_accumulation_steps = 4
 
 [train.lg]
 wandb_enabled = false
@@ -70,7 +71,7 @@ with_stack = false
 with_flops = true
 activities = ["cpu", "cuda"]
 trace_prefix = "trace"
-run_name = "latest_v1"
+run_name = "vocabpad_bs128"
 
 [optim]
 muon_momentum = 0.95
@@ -87,7 +88,7 @@ mixed_precision = true
 
 [dl]
 data_dir = "data/climbmix"
-batch_size = 64
+batch_size = 128
 buffer_size = 1000
 tokenizer_batch_size = 128
 seq_length = 128
