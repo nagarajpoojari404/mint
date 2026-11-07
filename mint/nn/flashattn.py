@@ -33,6 +33,8 @@ class FlashAttention(nn.Module):
         kv_cache: KVCache | None = None,
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
+        attn_logit_softcapping: float | None = None,
+        scale: float | None = None,
     ) -> torch.Tensor:
         if kv_cache is None:
             return self._attention(
@@ -43,6 +45,8 @@ class FlashAttention(nn.Module):
                 window_size=window_size,
                 base_attn_mask=base_attn_mask,
                 doc_ids=doc_ids,
+                attn_logit_softcapping=attn_logit_softcapping,
+                scale=scale,
             )
 
         return self._attention_with_kvcache(
@@ -54,6 +58,8 @@ class FlashAttention(nn.Module):
             window_size=window_size,
             base_attn_mask=base_attn_mask,
             doc_ids=doc_ids,
+            attn_logit_softcapping=attn_logit_softcapping,
+            scale=scale,
         )
 
     def _load_custom_flash_attention(self) -> Any:  # noqa: ANN401
@@ -86,6 +92,55 @@ class FlashAttention(nn.Module):
     def _use_fa3(self, q: torch.Tensor) -> bool:
         return self._fa3 is not None and q.is_cuda and q.dtype == torch.bfloat16
 
+    def _softcapping_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        softcap: float,
+        scale: float | None = None,
+        causal: bool,
+        window_size: tuple[int, int],
+        base_attn_mask: torch.Tensor | None = None,
+        doc_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        _, H, T, D = q.shape
+        _, H_k, S, _ = k.shape
+
+        scale_val = scale if scale is not None else 1.0 / (D**0.5)
+
+        if H != H_k:
+            n_rep = H // H_k
+            k = k.repeat_interleave(n_rep, dim=1)
+            v = v.repeat_interleave(n_rep, dim=1)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale_val
+        scores = torch.tanh(scores / softcap) * softcap
+
+        mask = None
+        if doc_ids is not None:
+            mask = doc_ids.unsqueeze(1).unsqueeze(-1) == doc_ids.unsqueeze(1).unsqueeze(-2)
+
+        if base_attn_mask is not None:
+            mask = base_attn_mask if mask is None else (mask & base_attn_mask)
+
+        if causal:
+            device = q.device
+            row_idx = (S - T) + torch.arange(T, device=device).unsqueeze(1)
+            col_idx = torch.arange(S, device=device).unsqueeze(0)
+            causal_mask = col_idx <= row_idx
+            left_window = window_size[0]
+            if 0 <= left_window < S:
+                causal_mask = causal_mask & ((row_idx - col_idx) <= left_window)
+            mask = causal_mask if mask is None else (mask & causal_mask)
+
+        if mask is not None:
+            scores = scores.masked_fill(~mask, float("-inf"))
+
+        probs = F.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
+        return torch.matmul(probs, v)
+
     def _attention(
         self,
         q: torch.Tensor,
@@ -96,7 +151,26 @@ class FlashAttention(nn.Module):
         window_size: tuple[int, int],
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
+        attn_logit_softcapping: float | None = None,
+        scale: float | None = None,
     ) -> torch.Tensor:
+        if attn_logit_softcapping is not None and attn_logit_softcapping > 0:
+            q_sdpa = q.transpose(1, 2)
+            k_sdpa = k.transpose(1, 2)
+            v_sdpa = v.transpose(1, 2)
+            out = self._softcapping_attention(
+                q_sdpa,
+                k_sdpa,
+                v_sdpa,
+                softcap=attn_logit_softcapping,
+                scale=scale,
+                causal=causal,
+                window_size=window_size,
+                base_attn_mask=base_attn_mask,
+                doc_ids=doc_ids,
+            )
+            return out.transpose(1, 2)
+
         # Falls through to SDPA if flash_attn is not installed
         if doc_ids is not None and flash_attn_varlen_func is not None:
             B, T, H, D = q.shape
@@ -179,10 +253,16 @@ class FlashAttention(nn.Module):
         window_size: tuple[int, int],
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
+        attn_logit_softcapping: float | None = None,
+        scale: float | None = None,
     ) -> torch.Tensor:
         k_cache, v_cache, cache_seqlens = kv_cache.get_cache_tensors()
 
-        if doc_ids is None and self._use_fa3(q):
+        if (
+            (attn_logit_softcapping is None or attn_logit_softcapping <= 0)
+            and doc_ids is None
+            and self._use_fa3(q)
+        ):
             fa3 = self._fa3
             assert fa3 is not None
             return fa3.flash_attn_with_kvcache(
@@ -201,6 +281,21 @@ class FlashAttention(nn.Module):
         q_sdpa = q.transpose(1, 2)
         k_sdpa = k_full.transpose(1, 2)
         v_sdpa = v_full.transpose(1, 2)
+
+        if attn_logit_softcapping is not None and attn_logit_softcapping > 0:
+            out = self._softcapping_attention(
+                q_sdpa,
+                k_sdpa,
+                v_sdpa,
+                softcap=attn_logit_softcapping,
+                scale=scale,
+                causal=causal,
+                window_size=window_size,
+                base_attn_mask=base_attn_mask,
+                doc_ids=doc_ids,
+            )
+            return out.transpose(1, 2)
+
         enable_gqa = q_sdpa.size(1) != k_sdpa.size(1)
 
         out = self._sdpa_attention(

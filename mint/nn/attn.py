@@ -17,6 +17,9 @@ class GroupedQueryAttention(nn.Module):
         pos_embeddings: PosEmbeddings,
         dtype: torch.dtype,
         window_size: int = -1,
+        attn_logit_softcapping: float | None = None,
+        query_pre_attn_scalar: float | None = None,
+        use_qk_norm: bool = False,
     ) -> None:
         super().__init__()
 
@@ -25,6 +28,8 @@ class GroupedQueryAttention(nn.Module):
         self.head_dim = head_dim
         self.window_size = window_size
         self.pos_embeddings = pos_embeddings
+        self.attn_logit_softcapping = attn_logit_softcapping
+        self.query_pre_attn_scalar = query_pre_attn_scalar
 
         self.attention = FlashAttention(use_custom_fa=True)
 
@@ -33,10 +38,10 @@ class GroupedQueryAttention(nn.Module):
         self.wv = nn.Linear(embed_dim, self.n_kv_heads * self.head_dim, bias=False, dtype=dtype)
         self.wo = nn.Linear(self.n_heads * self.head_dim, embed_dim, bias=False, dtype=dtype)
 
-        self.q_norm = RMSNorm(self.head_dim)
-        self.k_norm = RMSNorm(self.head_dim)
+        self.q_norm = RMSNorm(self.head_dim) if use_qk_norm else None
+        self.k_norm = RMSNorm(self.head_dim) if use_qk_norm else None
 
-    def forward(  # noqa: ANN201
+    def forward(
         self,
         x: torch.Tensor,
         kv_cache: KVCache | None = None,
@@ -45,19 +50,24 @@ class GroupedQueryAttention(nn.Module):
         # like [PAD] tokens in SFT or blocking cross sentence attn in best fit pretrain
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
-    ):
+    ) -> torch.Tensor:
         bsz, seqlen, _ = x.shape
 
         q = self.wq(x).view(bsz, seqlen, self.n_heads, self.head_dim)
         k = self.wk(x).view(bsz, seqlen, self.n_kv_heads, self.head_dim)
         v = self.wv(x).view(bsz, seqlen, self.n_kv_heads, self.head_dim)
 
-        q = self.q_norm(q)
-        k = self.k_norm(k)
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+        if self.k_norm is not None:
+            k = self.k_norm(k)
 
         q, k, attn_bias = self.pos_embeddings(q, k, start_pos=start_pos)
 
         assert attn_bias is None, "attention bias is not supported yet"
+
+        if self.query_pre_attn_scalar is not None:
+            q = q * self.query_pre_attn_scalar
 
         window_size = (self.window_size, -1) if self.window_size > 0 else (-1, -1)
         out = self.attention(
@@ -69,6 +79,8 @@ class GroupedQueryAttention(nn.Module):
             kv_cache=kv_cache,
             base_attn_mask=base_attn_mask,
             doc_ids=doc_ids,
+            attn_logit_softcapping=self.attn_logit_softcapping,
+            scale=1.0 if self.query_pre_attn_scalar is not None else None,
         )
 
         out = out.reshape(bsz, seqlen, -1)
@@ -84,6 +96,9 @@ class MultiHeadAttention(nn.Module):
         pos_embeddings: PosEmbeddings,
         dtype: torch.dtype,
         window_size: int = -1,
+        attn_logit_softcapping: float | None = None,
+        query_pre_attn_scalar: float | None = None,
+        use_qk_norm: bool = False,
     ) -> None:
         super().__init__()
 
@@ -91,6 +106,8 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = head_dim
         self.window_size = window_size
         self.pos_embeddings = pos_embeddings
+        self.attn_logit_softcapping = attn_logit_softcapping
+        self.query_pre_attn_scalar = query_pre_attn_scalar
 
         self.attention = FlashAttention(use_custom_fa=True)
 
@@ -99,10 +116,10 @@ class MultiHeadAttention(nn.Module):
         self.wv = nn.Linear(embed_dim, self.n_heads * self.head_dim, bias=False, dtype=dtype)
         self.wo = nn.Linear(self.n_heads * self.head_dim, embed_dim, bias=False, dtype=dtype)
 
-        self.q_norm = RMSNorm(self.head_dim)
-        self.k_norm = RMSNorm(self.head_dim)
+        self.q_norm = RMSNorm(self.head_dim) if use_qk_norm else None
+        self.k_norm = RMSNorm(self.head_dim) if use_qk_norm else None
 
-    def forward(  # noqa: ANN201
+    def forward(
         self,
         x: torch.Tensor,
         kv_cache: KVCache | None = None,
@@ -111,19 +128,24 @@ class MultiHeadAttention(nn.Module):
         # like [PAD] tokens in SFT or blocking cross sentence attn in best fit pretrain
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
-    ):
+    ) -> torch.Tensor:
         bsz, seqlen, _ = x.shape
 
         q = self.wq(x).view(bsz, seqlen, self.n_heads, self.head_dim)
         k = self.wk(x).view(bsz, seqlen, self.n_heads, self.head_dim)
         v = self.wv(x).view(bsz, seqlen, self.n_heads, self.head_dim)
 
-        q = self.q_norm(q)
-        k = self.k_norm(k)
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+        if self.k_norm is not None:
+            k = self.k_norm(k)
 
         q, k, attn_bias = self.pos_embeddings(q, k, start_pos=start_pos)
 
         assert attn_bias is None, "attention bias is not supported yet"
+
+        if self.query_pre_attn_scalar is not None:
+            q = q * self.query_pre_attn_scalar
 
         window_size = (self.window_size, -1) if self.window_size > 0 else (-1, -1)
         out = self.attention(
@@ -135,6 +157,8 @@ class MultiHeadAttention(nn.Module):
             kv_cache=kv_cache,
             base_attn_mask=base_attn_mask,
             doc_ids=doc_ids,
+            attn_logit_softcapping=self.attn_logit_softcapping,
+            scale=1.0 if self.query_pre_attn_scalar is not None else None,
         )
 
         out = out.reshape(bsz, seqlen, -1)
