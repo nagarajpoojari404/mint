@@ -7,6 +7,7 @@ from torch import Tensor
 from torch.optim import Optimizer
 
 from mint.config.base import Config
+from mint.optim.muon_adamw import MuonAdamWConfig
 
 
 @dataclass
@@ -26,7 +27,7 @@ class MuonConfig(Config):
 
 
 @dataclass
-class MuonAdamWConfig(AdamConfig, MuonConfig):
+class DistMuonAdamWConfig(MuonAdamWConfig):
     pass
 
 
