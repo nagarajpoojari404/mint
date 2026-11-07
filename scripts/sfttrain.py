@@ -15,7 +15,7 @@ from mint.data.datasets.mmlu import MMLU
 from mint.data.datasets.smoltalk import SmolTalk
 from mint.data.datasets.spellingbee import SimpleSpelling, SpellingBee
 from mint.data.dist.sft import DistributedSFTDataloader
-from mint.nn.models import Gemma, GemmaConfig, configure_optimizer
+from mint.nn.gemma import Gemma, GemmaConfig, configure_optimizer
 from mint.optim.muon_adamw import MuonAdamWConfig
 from mint.tokenizer import TikTokenizer
 from mint.trainer.sft import SFTConfig, SFTTrainer

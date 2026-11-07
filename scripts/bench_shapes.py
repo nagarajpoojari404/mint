@@ -64,10 +64,10 @@ def run_one(
         head_dim=HEAD_DIM,
         pad_vocab_multiple=pad_vocab,
     )
-    model = Gemma(cfg, gradient_checkpointing=False)
-    model = device.move_to_device(model, from_meta=False)
-    n_params = model.get_num_params(non_embedding=False)
-    f_tok = flops_per_token(model, seq_len, n_heads, n_layers)
+    gemma = Gemma(cfg, gradient_checkpointing=False)
+    model = device.move_to_device(gemma, from_meta=False)
+    n_params = gemma.get_num_params(non_embedding=False)
+    f_tok = flops_per_token(gemma, seq_len, n_heads, n_layers)
     model = device.compile_model(model, enabled=True)
     optimizer = (
         configure_optimizer(model, cfg, SchedulerConfig(), MuonAdamWConfig()) if with_optim else None
