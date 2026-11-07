@@ -159,15 +159,16 @@ class PreTrainer(BaseTrainer):
 
         self._log_wandb(metrics, step=step)
 
-        if self.is_main_process and results and save_checkpoint:
-            val_loss = results.get("loss")
-            if val_loss is not None:
+        val_loss = results.get("loss") if results and save_checkpoint else None
+        if val_loss is not None:
+            dataloader_state = self._get_dataloader_state()  # collective: all ranks must call
+            if self.is_main_process:
                 is_best = self.checkpointer.should_checkpoint_on_eval(val_loss)
                 self.checkpointer.save_checkpoint(
                     step=step,
                     model=self.model,
                     optimizer=self.optimizer,
-                    dataloader_state=self._get_dataloader_state(),
+                    dataloader_state=dataloader_state,
                     val_loss=val_loss,
                     is_best=is_best,
                 )
