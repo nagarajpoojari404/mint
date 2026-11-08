@@ -15,7 +15,7 @@ import time
 import torch
 from torch import nn
 
-from mint.nn.models import Gemma, GemmaConfig, configure_optimizer
+from mint.models.gemma import Gemma, GemmaConfig, configure_optimizer
 from mint.optim.muon_adamw import MuonAdamWConfig
 from mint.trainer.base import _masked_cross_entropy
 from mint.trainer.scheduler import SchedulerConfig

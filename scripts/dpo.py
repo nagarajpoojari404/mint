@@ -7,7 +7,7 @@ from torch import nn
 from mint.config.base import Config
 from mint.data.dataloader import DataloaderConfig
 from mint.data.dist.dpo import DistributedDPODataloader
-from mint.nn.gemma import Gemma, GemmaConfig, configure_optimizer
+from mint.models.gemma import Gemma, GemmaConfig, configure_optimizer
 from mint.optim.muon_adamw import MuonAdamWConfig
 from mint.tokenizer import TikTokenizer
 from mint.trainer.dpo import DPOConfig, DPOTrainer
