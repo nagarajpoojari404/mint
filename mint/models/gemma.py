@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 import torch.distributed as dist
@@ -31,6 +31,17 @@ class GemmaConfig(ModelConfig):
     # aligned for tensor cores. Logits are sliced back to vocab_size. 1 disables padding.
     # Changes parameter shapes, so checkpoints are not interchangeable across values.
     pad_vocab_multiple: int = 1
+    tp_plan: dict[str, str] = field(
+        default_factory=lambda: {
+            "blocks.*.gqa.wq": "col",
+            "blocks.*.gqa.wk": "col",
+            "blocks.*.gqa.wv": "col",
+            "blocks.*.gqa.wo": "row",
+            "blocks.*.ffn.fc1": "col",
+            "blocks.*.ffn.fc2": "col",
+            "blocks.*.ffn.fc3": "row",
+        }
+    )
 
 
 class Gemma(nn.Module):
