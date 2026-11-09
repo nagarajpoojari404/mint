@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
@@ -167,6 +168,7 @@ def configure_optimizer(
     model_cfg: GemmaConfig,
     sched_cfg: SchedulerConfig,
     optim_cfg: MuonAdamWConfig,
+    dp_group: dist.ProcessGroup | None = None,
 ) -> DistMuonAdamW:
     params: dict[str, list[nn.Parameter]] = {
         "lm_head": [],
@@ -232,4 +234,4 @@ def configure_optimizer(
             }
         )
 
-    return DistMuonAdamW(param_groups)
+    return DistMuonAdamW(param_groups, group=dp_group)

@@ -55,9 +55,11 @@ class BPBEvaluator(Evaluator):
         avg_loss = total_loss / num_steps
 
         # Reduce validation loss across all GPUs to get global average
-        if self.process_info["distributed"]:
+        if self.process_info["dp_size"] > 1:
             avg_loss_tensor = torch.tensor(avg_loss, device=self.device.device)
-            dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.AVG)
+            dist.all_reduce(
+                avg_loss_tensor, op=dist.ReduceOp.AVG, group=self.device.parallel.dp_group
+            )
             avg_loss = avg_loss_tensor.item()
 
         # Calculate bits per byte (BPB) metric
@@ -66,7 +68,7 @@ class BPBEvaluator(Evaluator):
         # TODO: divide it by bytes per token ratio
 
         tokens_per_second = (
-            (total_tokens * self.process_info["world_size"]) / eval_time if eval_time > 0 else 0.0
+            (total_tokens * self.process_info["dp_size"]) / eval_time if eval_time > 0 else 0.0
         )
 
         return {

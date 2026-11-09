@@ -81,6 +81,7 @@ def main() -> None:
         model_cfg=config.model,
         optim_cfg=config.optim,
         sched_cfg=config.train.sched,
+        dp_group=device.parallel.dp_group,
     )
     dataloader: DistributedDPODataloader = DistributedDPODataloader(
         device=device,

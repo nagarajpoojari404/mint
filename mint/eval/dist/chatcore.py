@@ -51,8 +51,8 @@ class ChatCoreEvaluator(Evaluator):
     def _evaluate_dataset(self, dataset: SFTEvalDataset, num_examples: int | None = None):  # noqa: ANN202
         total = len(dataset) if num_examples is None else min(num_examples, len(dataset))
 
-        rank = self.process_info["rank"]
-        world_size = self.process_info["world_size"]
+        rank = self.process_info["dp_rank"]
+        world_size = self.process_info["dp_size"]
 
         correct = 0
         count = 0
@@ -64,11 +64,13 @@ class ChatCoreEvaluator(Evaluator):
                 correct += 1
             count += 1
 
-        if self.process_info["distributed"]:
+        if self.process_info["dp_size"] > 1:
             correct_tensor = torch.tensor(correct, dtype=torch.float32, device=self.device.device)
             count_tensor = torch.tensor(count, dtype=torch.float32, device=self.device.device)
-            dist.all_reduce(correct_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(
+                correct_tensor, op=dist.ReduceOp.SUM, group=self.device.parallel.dp_group
+            )
+            dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM, group=self.device.parallel.dp_group)
             correct = correct_tensor.item()
             count = count_tensor.item()
 

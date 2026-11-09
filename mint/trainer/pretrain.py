@@ -223,7 +223,7 @@ class PreTrainer(BaseTrainer):
                     step_time = time.perf_counter() - step_start_time
                     tokens_per_step = (
                         targets.numel()
-                        * self.process_info["world_size"]
+                        * self.process_info["dp_size"]
                         * self.config.gradient_accumulation_steps
                     )
 

@@ -40,8 +40,9 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
         self.tokenizer_batch_size = config.tokenizer_batch_size
 
         proc_info = device.process_info()
-        self.rank = proc_info["rank"]
-        self.world_size = proc_info["world_size"]
+        self.rank = proc_info["dp_rank"]
+        self.world_size = proc_info["dp_size"]
+        self.is_main = proc_info["is_main"]
 
         # Dynamic shard discovery
         self.min_shards_required = min_shards_required
@@ -76,14 +77,14 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
         while len(shards) < required_count:
             # Check if we've hit the upper limit
             if self.max_shards_to_wait > 0 and len(shards) >= self.max_shards_to_wait:
-                if self.rank == 0:
+                if self.is_main:
                     logger.info(
                         f"✓ Reached max shard limit ({self.max_shards_to_wait}). "
                         f"Proceeding with {len(shards)} shards."
                     )
                 return
 
-            if self.rank == 0:
+            if self.is_main:
                 wait_msg = f"Waiting for shards... ({len(shards)}/{required_count} available"
                 if self.max_shards_to_wait > 0:
                     wait_msg += f", max: {self.max_shards_to_wait}"
@@ -94,7 +95,7 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
             self._refresh_shard_lists()
             shards = self.train_shards if split == "train" else self.val_shards
 
-        if self.rank == 0:
+        if self.is_main:
             logger.info(f"✓ Sufficient shards available: {len(shards)}")
 
     def _should_refresh_shards(self) -> bool:
@@ -118,7 +119,7 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
                 old_count = len(shards)
                 self._refresh_shard_lists()
                 shards = self.train_shards if split == "train" else self.val_shards
-                if len(shards) > old_count and self.rank == 0:
+                if len(shards) > old_count and self.is_main:
                     logger.info(
                         f"Discovered {len(shards) - old_count} new shard(s). Total: {len(shards)}"
                     )
@@ -127,13 +128,13 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
             if not shards:
                 # If max_shards_to_wait is set and we've reached it, stop waiting
                 if self.max_shards_to_wait > 0:
-                    if self.rank == 0:
+                    if self.is_main:
                         logger.info(
                             f"No shards available and max limit ({self.max_shards_to_wait}) reached."
                         )
                     break
 
-                if self.rank == 0:
+                if self.is_main:
                     logger.info("No shards available, waiting...")
                 time.sleep(self.shard_check_interval)
                 self._refresh_shard_lists()
@@ -198,20 +199,20 @@ class DistributedBOSBestfitPretrainDataloader(DistributedDataloader):
 
         # Skip already-consumed batches when resuming from checkpoint
         if batches_to_skip > 0:
-            if self.rank == 0:
+            if self.is_main:
                 logger.info(f"Skipping {batches_to_skip} already-consumed document batches...")
             for _ in range(batches_to_skip):
                 try:
                     self._refill_buffer(doc_buffer, batches)
                     doc_buffer.clear()  # Discard these batches
                 except StopIteration:
-                    if self.rank == 0:
+                    if self.is_main:
                         logger.warning(
                             f"Reached end of data while skipping batches. "
                             f"Skipped {_} of {batches_to_skip}"
                         )
                     break
-            if self.rank == 0:
+            if self.is_main:
                 logger.info(f"✓ Skipped {batches_to_skip} batches, resuming training...")
 
         while True:

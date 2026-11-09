@@ -65,7 +65,7 @@ class CoreEvaluator(Evaluator):
 
         core = sum(task_result["accuracy"] for task_result in results.values()) / len(results)
         tokens_per_second = (
-            (total_examples * self.process_info["world_size"]) / eval_time if eval_time > 0 else 0.0
+            (total_examples * self.process_info["dp_size"]) / eval_time if eval_time > 0 else 0.0
         )
         return {
             "tasks": results,
@@ -79,8 +79,8 @@ class CoreEvaluator(Evaluator):
         if limit is not None:
             data = data[:limit]
 
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
-        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        rank = self.process_info["dp_rank"]
+        world_size = self.process_info["dp_size"]
 
         correct = torch.zeros(len(data), dtype=torch.float32, device=self.device.device)
 
@@ -88,8 +88,8 @@ class CoreEvaluator(Evaluator):
             correct[idx] = float(self.evaluate_example(idx, data, task_meta))
 
         if world_size > 1:
-            dist.barrier()
-            dist.all_reduce(correct, op=dist.ReduceOp.SUM)
+            dist.barrier(group=self.device.parallel.dp_group)
+            dist.all_reduce(correct, op=dist.ReduceOp.SUM, group=self.device.parallel.dp_group)
 
         accuracy = correct.mean().item() if len(data) > 0 else 0.0
         return {
