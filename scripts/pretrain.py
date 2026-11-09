@@ -78,6 +78,8 @@ def main() -> None:
         )
         model = device.move_to_device(model, from_meta=False)
 
+    model = device.setup_parallel(model, tp_plan=getattr(config.model, "tp_plan", None))
+
     if config.train.compile_model:
         model = device.compile_model(model, enabled=True)  # type: ignore[assignment]
 
