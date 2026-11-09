@@ -71,6 +71,10 @@ def main() -> None:
     else:
         raise ValueError("use meta device")
 
+    policy_model = device.setup_parallel(
+        policy_model, tp_plan=getattr(config.model, "tp_plan", None)
+    )
+
     if config.train.compile_model:
         policy_model = device.compile_model(policy_model, enabled=True)  # type: ignore[assignment]
 
