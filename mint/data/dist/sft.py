@@ -36,8 +36,8 @@ class DistributedSFTDataloader(DistributedDataloader):
         self.shuffle = shuffle
 
         proc_info = device.process_info()
-        self.rank = proc_info["rank"]
-        self.world_size = proc_info["world_size"]
+        self.rank = proc_info["dp_rank"]
+        self.world_size = proc_info["dp_size"]
 
         self.dataset_indices = self._build_dataset_indices()
         self.rank_indices = self._partition_for_rank()

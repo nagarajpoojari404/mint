@@ -41,8 +41,9 @@ POLAR_EXPRESS_COEFFS = [
 
 
 class DistMuonAdamW(Optimizer):
-    def __init__(self, param_groups: list[dict]) -> None:
+    def __init__(self, param_groups: list[dict], group: dist.ProcessGroup | None = None) -> None:
         super().__init__(param_groups, defaults={})
+        self.process_group = group
 
         self._adamw_step_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
@@ -158,7 +159,9 @@ class DistMuonAdamW(Optimizer):
 
             grad = p.grad
             if p.numel() < 1024:
-                work = dist.all_reduce(grad, op=dist.ReduceOp.AVG, async_op=True)
+                work = dist.all_reduce(
+                    grad, op=dist.ReduceOp.AVG, group=self.process_group, async_op=True
+                )
                 future = work.get_future() if work is not None else None  # type: ignore
                 param_infos[p] = {"future": future, "grad_slice": grad, "is_small": True}
             else:
@@ -169,7 +172,11 @@ class DistMuonAdamW(Optimizer):
                 rank_size = grad.shape[0] // world_size
                 grad_slice = torch.empty_like(grad[:rank_size])
                 work = dist.reduce_scatter_tensor(
-                    grad_slice, grad, op=dist.ReduceOp.AVG, async_op=True
+                    grad_slice,
+                    grad,
+                    op=dist.ReduceOp.AVG,
+                    group=self.process_group,
+                    async_op=True,
                 )
                 future = work.get_future() if work is not None else None  # type: ignore
                 param_infos[p] = {"future": future, "grad_slice": grad_slice, "is_small": False}
@@ -196,7 +203,11 @@ class DistMuonAdamW(Optimizer):
         # Reduce_scatter to get this rank's chunk
         grad_chunk = torch.empty(chunk_size, *shape, dtype=dtype, device=device)
         work = dist.reduce_scatter_tensor(
-            grad_chunk, stacked_grads, op=dist.ReduceOp.AVG, async_op=True
+            grad_chunk,
+            stacked_grads,
+            op=dist.ReduceOp.AVG,
+            group=self.process_group,
+            async_op=True,
         )
         future = work.get_future() if work is not None else None  # type: ignore
 
@@ -258,7 +269,9 @@ class DistMuonAdamW(Optimizer):
 
             # Large params need all_gather
             if not pinfo["is_small"]:
-                work = dist.all_gather_into_tensor(p, p_slice, async_op=True)
+                work = dist.all_gather_into_tensor(
+                    p, p_slice, group=self.process_group, async_op=True
+                )
                 future = work.get_future() if work is not None else None  # type: ignore
                 gather_list.append({"future": future, "params": None})
 
@@ -318,7 +331,9 @@ class DistMuonAdamW(Optimizer):
             updated_params[num_owned:].zero_()
 
         stacked_params = info["stacked_grads"]
-        work = dist.all_gather_into_tensor(stacked_params, updated_params, async_op=True)
+        work = dist.all_gather_into_tensor(
+            stacked_params, updated_params, group=self.process_group, async_op=True
+        )
         future = work.get_future() if work is not None else None  # type: ignore
         gather_list.append({"future": future, "stacked_params": stacked_params, "params": params})
 
@@ -340,8 +355,8 @@ class DistMuonAdamW(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
+        rank = dist.get_rank(self.process_group)
+        world_size = dist.get_world_size(self.process_group)
 
         reduce_infos = []
         for group in self.param_groups:

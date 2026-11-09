@@ -262,7 +262,7 @@ class DPOTrainer(BaseTrainer):
                 # this is over estimate because we are also counting PAD tokens
                 tokens_per_step = (
                     concat_ids.numel()
-                    * self.process_info["world_size"]
+                    * self.process_info["dp_size"]
                     * self.config.gradient_accumulation_steps
                 )
 

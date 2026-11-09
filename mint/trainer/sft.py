@@ -180,7 +180,7 @@ class SFTTrainer(BaseTrainer):
                 step_time = time.perf_counter() - step_start_time
                 tokens_per_step = (
                     loss_mask.sum().item()
-                    * self.process_info["world_size"]
+                    * self.process_info["dp_size"]
                     * self.config.gradient_accumulation_steps
                 )
 

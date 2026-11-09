@@ -60,8 +60,8 @@ class DistributedDPODataloader(DistributedDataloader):
         self.filepath = Path(config.data_dir) / Path(filename)
 
         proc_info = device.process_info()
-        self.rank = proc_info["rank"]
-        self.world_size = proc_info["world_size"]
+        self.rank = proc_info["dp_rank"]
+        self.world_size = proc_info["dp_size"]
 
         assert Path(self.filepath).exists()
 
