@@ -10,11 +10,13 @@ from torch.amp.grad_scaler import GradScaler
 
 from mint.config.base import Config
 from mint.utils.logger import logger
+from mint.utils.parallel import ParallelContext
 
 
 @dataclass
 class DeviceConfig(Config):
     mixed_precision: bool = True
+    tp_size: int = 1
 
 
 class Device:
@@ -22,6 +24,7 @@ class Device:
         self._init_distributed()
         self.device = self._detect()
         self.type = self.device.type
+        self.parallel = ParallelContext.build(tp_size=config.tp_size, device_type=self.type)
 
         self.is_cuda = self.type == "cuda"
         self.is_mps = self.type == "mps"
@@ -184,6 +187,10 @@ class Device:
             "rank": rank,
             "local_rank": local,
             "world_size": world,
+            "dp_rank": self.parallel.dp_rank,
+            "dp_size": self.parallel.dp_size,
+            "tp_rank": self.parallel.tp_rank,
+            "tp_size": self.parallel.tp_size,
             "name": name,
             "is_main": rank == 0,
             "distributed": dist_on,
