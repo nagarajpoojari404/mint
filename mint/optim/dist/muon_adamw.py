@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -8,6 +9,7 @@ from torch.optim import Optimizer
 
 from mint.config.base import Config
 from mint.optim.muon_adamw import MuonAdamWConfig
+from mint.utils.parallel import _ZeROParam
 
 
 @dataclass
@@ -60,30 +62,29 @@ class DistMuonAdamW(Optimizer):
         self._fused_adam = torch.compile(
             self._adamw_step_fused,
             fullgraph=True,
-            dynamic=False,
+            dynamic=True,
         )
 
         self._fused_muon = torch.compile(
             self._muon_step_fused,
             fullgraph=True,
-            dynamic=False,
+            dynamic=True,
         )
 
     @staticmethod
     def _adamw_step_fused(
         p: Tensor,
         grad: Tensor,
-        exp_avg: Tensor,  # First moment (same shape as p)
-        exp_avg_sq: Tensor,  # Second moment (same shape as p)
-        step_t: Tensor,  # 0-D CPU tensor: step count
-        lr_t: Tensor,  # 0-D CPU tensor: learning rate
-        beta1_t: Tensor,  # 0-D CPU tensor: beta1
-        beta2_t: Tensor,  # 0-D CPU tensor: beta2
-        eps_t: Tensor,  # 0-D CPU tensor: epsilon
-        wd_t: Tensor,  # 0-D CPU tensor: weight decay
+        exp_avg: Tensor,
+        exp_avg_sq: Tensor,
+        step_t: Tensor,
+        lr_t: Tensor,
+        beta1_t: Tensor,
+        beta2_t: Tensor,
+        eps_t: Tensor,
+        wd_t: Tensor,
     ) -> None:
         p.mul_(1 - lr_t * wd_t)
-
         exp_avg.lerp_(grad, 1 - beta1_t)
         exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
 
@@ -96,149 +97,92 @@ class DistMuonAdamW(Optimizer):
 
     @staticmethod
     def _muon_step_fused(
-        stacked_grads: Tensor,  # (N, H, W) - stacked gradients
-        stacked_params: Tensor,  # (N, H, W) - stacked parameters
-        momentum_buffer: Tensor,  # (N, H, W) - momentum buffer
-        second_momentum_buffer: Tensor,  # (N, H, 1) or (N, 1, W) - variance buffer
-        momentum_t: Tensor,  # 0-D CPU tensor: momentum coefficient
-        lr_t: Tensor,  # 0-D CPU tensor: learning rate
-        wd_t: Tensor,  # 0-D CPU tensor: weight decay
-        beta2_t: Tensor,  # 0-D CPU tensor: beta2 for variance
-        ns_steps: int,  # Number of Newton-Schulz iterations
-        red_dim: int,  # Reduction dimension (-1 or -2)
+        grad: Tensor,
+        param: Tensor,
+        momentum_buffer: Tensor,
+        second_momentum_buffer: Tensor,
+        momentum_t: Tensor,
+        lr_t: Tensor,
+        wd_t: Tensor,
+        beta2_t: Tensor,
+        ns_steps: int,
+        red_dim: int,
     ) -> None:
+        momentum = momentum_t.to(grad.dtype)
+        momentum_buffer.lerp_(grad, 1 - momentum)
+        g = grad.lerp(momentum_buffer, momentum)
 
-        # Nesterov momentum
-        momentum = momentum_t.to(stacked_grads.dtype)
-        momentum_buffer.lerp_(stacked_grads, 1 - momentum)
-        g = stacked_grads.lerp_(momentum_buffer, momentum)
+        if g.ndim >= 2:
+            X = g.bfloat16() if g.dtype == torch.bfloat16 else g
+            X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.01 + 1e-6)
+            if g.size(-2) > g.size(-1):
+                for a, b, c in POLAR_EXPRESS_COEFFS[:ns_steps]:
+                    A = X.mT @ X
+                    B = b * A + c * (A @ A)
+                    X = a * X + X @ B
+            else:
+                for a, b, c in POLAR_EXPRESS_COEFFS[:ns_steps]:
+                    A = X @ X.mT
+                    B = b * A + c * (A @ A)
+                    X = a * X + B @ X
+            g = X
+        else:
+            g = g / (g.norm() * 1.01 + 1e-6)
 
-        # Polar Express orthogonalization
-        # Use bfloat16 for speed when available (fp16 is unstable here)
-        X = g.bfloat16() if g.dtype == torch.bfloat16 else g
-        X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.01 + 1e-6)
-
-        if g.size(-2) > g.size(-1):  # Tall matrix
-            for a, b, c in POLAR_EXPRESS_COEFFS[:ns_steps]:
-                A = X.mT @ X
-                B = b * A + c * (A @ A)
-                X = a * X + X @ B
-        else:  # Wide matrix
-            for a, b, c in POLAR_EXPRESS_COEFFS[:ns_steps]:
-                A = X @ X.mT
-                B = b * A + c * (A @ A)
-                X = a * X + B @ X
-        g = X
-
-        # Variance reduction (NorMuon)
         beta2 = beta2_t.to(g.dtype)
         v_mean = g.float().square().mean(dim=red_dim, keepdim=True)
         red_dim_size = g.size(red_dim)
-        v_norm_sq = v_mean.sum(dim=(-2, -1), keepdim=True) * red_dim_size
+        v_norm_sq = v_mean.sum(dim=-1, keepdim=True) * red_dim_size
         v_norm = v_norm_sq.sqrt()
 
         second_momentum_buffer.lerp_(v_mean.to(second_momentum_buffer.dtype), 1 - beta2)
         step_size = second_momentum_buffer.clamp_min(1e-10).rsqrt()
         scaled_sq_sum = (v_mean * red_dim_size) * step_size.float().square()
-        v_norm_new = scaled_sq_sum.sum(dim=(-2, -1), keepdim=True).sqrt()
+        v_norm_new = scaled_sq_sum.sum(dim=-1, keepdim=True).sqrt()
         final_scale = step_size * (v_norm / v_norm_new.clamp_min(1e-10))
         g = g * final_scale.to(g.dtype)
 
-        # Cautious weight decay + parameter update
-        # Only apply weight decay when gradient aligns with parameter
         lr = lr_t.to(g.dtype)
         wd = wd_t.to(g.dtype)
-        mask = (g * stacked_params) >= 0
-        stacked_params.sub_(lr * g + lr * wd * stacked_params * mask)
+        mask = (g * param) >= 0
+        param.sub_(lr * g + lr * wd * param * mask)
 
-    def _reduce_adamw(self, group: dict, world_size: int) -> dict:
-        param_infos = {}
+    def _step_adamw(self, group: dict, gather_list: list) -> None:
         for p in group["params"]:
-            if p.grad is None:
-                continue
-
-            grad = p.grad
-            if p.numel() < 1024:
-                work = dist.all_reduce(
-                    grad, op=dist.ReduceOp.AVG, group=self.process_group, async_op=True
-                )
-                future = work.get_future() if work is not None else None  # type: ignore
-                param_infos[p] = {"future": future, "grad_slice": grad, "is_small": True}
+            if isinstance(p, _ZeROParam):
+                if p._ddp_level == 3:
+                    grad_slice = p._sliced_grad
+                    p_slice = p._sliced_param
+                elif p._ddp_level == 2:
+                    if p._sliced_grad is None:
+                        continue
+                    start = p._dp_rank * p._chunk_size
+                    end = start + p._chunk_size
+                    flat_p = p.data.reshape(-1)
+                    p_slice = flat_p[start:end]
+                    grad_slice = p._sliced_grad
+                elif p._ddp_level == 1:
+                    if p.grad is None:
+                        continue
+                    start = p._dp_rank * p._chunk_size
+                    end = start + p._chunk_size
+                    flat_p = p.data.reshape(-1)
+                    p_slice = flat_p[start:end]
+                    flat_g = p.grad.reshape(-1)
+                    if p._pad_size > 0:
+                        flat_g = torch.nn.functional.pad(flat_g, (0, p._pad_size))
+                    grad_slice = flat_g[start:end]
+                else:
+                    grad_slice = p.grad
+                    p_slice = p.data
             else:
-                assert grad.shape[0] % world_size == 0, (
-                    f"AdamW requires shape[0] ({grad.shape[0]}) "
-                    f"divisible by world_size ({world_size})"
-                )
-                rank_size = grad.shape[0] // world_size
-                grad_slice = torch.empty_like(grad[:rank_size])
-                work = dist.reduce_scatter_tensor(
-                    grad_slice,
-                    grad,
-                    op=dist.ReduceOp.AVG,
-                    group=self.process_group,
-                    async_op=True,
-                )
-                future = work.get_future() if work is not None else None  # type: ignore
-                param_infos[p] = {"future": future, "grad_slice": grad_slice, "is_small": False}
+                grad_slice = p.grad
+                p_slice = p.data
 
-        return {"param_infos": param_infos}
-
-    def _reduce_muon(self, group: dict, world_size: int) -> dict:
-        params = group["params"]
-        if not params:
-            return {"future": None}
-
-        chunk_size = (len(params) + world_size - 1) // world_size
-        padded_num_params = chunk_size * world_size
-        p = params[0]
-        shape, device, dtype = p.shape, p.device, p.dtype
-
-        # Stack gradients and zero-pad
-        grad_stack = torch.stack([p.grad for p in params])
-        stacked_grads = torch.empty(padded_num_params, *shape, dtype=dtype, device=device)
-        stacked_grads[: len(params)].copy_(grad_stack)
-        if len(params) < padded_num_params:
-            stacked_grads[len(params) :].zero_()
-
-        # Reduce_scatter to get this rank's chunk
-        grad_chunk = torch.empty(chunk_size, *shape, dtype=dtype, device=device)
-        work = dist.reduce_scatter_tensor(
-            grad_chunk,
-            stacked_grads,
-            op=dist.ReduceOp.AVG,
-            group=self.process_group,
-            async_op=True,
-        )
-        future = work.get_future() if work is not None else None  # type: ignore
-
-        return {
-            "future": future,
-            "grad_chunk": grad_chunk,
-            "stacked_grads": stacked_grads,
-            "chunk_size": chunk_size,
-        }
-
-    def _compute_adamw(
-        self, group: dict, info: dict, gather_list: list, rank: int, world_size: int
-    ) -> None:
-        param_infos = info["param_infos"]
-        for p in group["params"]:
-            if p not in param_infos:
+            if grad_slice is None or p_slice is None:
                 continue
 
-            pinfo = param_infos[p]
-            pinfo["future"].wait()
-            grad_slice = pinfo["grad_slice"]
             state = self.state[p]
-
-            # Determine slice to update
-            if pinfo["is_small"]:
-                p_slice = p
-            else:
-                rank_size = p.shape[0] // world_size
-                p_slice = p[rank * rank_size : (rank + 1) * rank_size]
-
-            # Lazy state initialization
             if not state:
                 state["step"] = 0
                 state["exp_avg"] = torch.zeros_like(p_slice)
@@ -246,7 +190,6 @@ class DistMuonAdamW(Optimizer):
 
             state["step"] += 1
 
-            # Fill 0-D tensors and run fused kernel
             self._adamw_step_t.fill_(state["step"])
             self._adamw_lr_t.fill_(group["lr"])
             self._adamw_beta1_t.fill_(group["betas"][0])
@@ -267,86 +210,88 @@ class DistMuonAdamW(Optimizer):
                 self._adamw_wd_t,
             )
 
-            # Large params need all_gather
-            if not pinfo["is_small"]:
-                work = dist.all_gather_into_tensor(
-                    p, p_slice, group=self.process_group, async_op=True
-                )
-                future = work.get_future() if work is not None else None  # type: ignore
-                gather_list.append({"future": future, "params": None})
+            if isinstance(p, _ZeROParam):
+                p._sliced_grad = None
+                if p._ddp_level in (1, 2) and p._dp_size > 1:
+                    full_p = p.data.reshape(-1)
+                    if p._pad_size > 0:
+                        full_p = torch.nn.functional.pad(full_p, (0, p._pad_size))
+                    work = dist.all_gather_into_tensor(
+                        full_p, p_slice, group=p._dp_group, async_op=True
+                    )
+                    gather_list.append({"work": work, "p": p, "full_p": full_p})
 
-    def _compute_muon(self, group: dict, info: dict, gather_list: list, rank: int) -> None:
-        if info["future"] is None:
-            return
+    def _step_muon(self, group: dict, gather_list: list) -> None:
+        for p in group["params"]:
+            if isinstance(p, _ZeROParam):
+                if p._ddp_level == 3:
+                    grad_slice = p._sliced_grad
+                    p_slice = p._sliced_param
+                elif p._ddp_level == 2:
+                    if p._sliced_grad is None:
+                        continue
+                    start = p._dp_rank * p._chunk_size
+                    end = start + p._chunk_size
+                    flat_p = p.data.reshape(-1)
+                    p_slice = flat_p[start:end]
+                    grad_slice = p._sliced_grad
+                elif p._ddp_level == 1:
+                    if p.grad is None:
+                        continue
+                    start = p._dp_rank * p._chunk_size
+                    end = start + p._chunk_size
+                    flat_p = p.data.reshape(-1)
+                    p_slice = flat_p[start:end]
+                    flat_g = p.grad.reshape(-1)
+                    if p._pad_size > 0:
+                        flat_g = torch.nn.functional.pad(flat_g, (0, p._pad_size))
+                    grad_slice = flat_g[start:end]
+                else:
+                    grad_slice = p.grad.reshape(-1) if p.grad is not None else None
+                    p_slice = p.data.reshape(-1)
+            else:
+                grad_slice = p.grad.reshape(-1) if p.grad is not None else None
+                p_slice = p.data.reshape(-1)
 
-        info["future"].wait()
-        params = group["params"]
-        chunk_size = info["chunk_size"]
-        grad_chunk = info["grad_chunk"]
-        p = params[0]
-        shape, device, dtype = p.shape, p.device, p.dtype
+            if grad_slice is None or p_slice is None:
+                continue
 
-        start_idx = rank * chunk_size
-        num_owned = min(chunk_size, max(0, len(params) - start_idx))
+            state = self.state[p]
+            if "momentum_buffer" not in state:
+                state["momentum_buffer"] = torch.zeros_like(p_slice)
+            if "second_momentum_buffer" not in state:
+                state["second_momentum_buffer"] = torch.zeros_like(p_slice)
 
-        state = self.state[p]
-        if "momentum_buffer" not in state:
-            state["momentum_buffer"] = torch.zeros(chunk_size, *shape, dtype=dtype, device=device)
-        if "second_momentum_buffer" not in state:
-            state_shape = (
-                (chunk_size, shape[-2], 1) if shape[-2] >= shape[-1] else (chunk_size, 1, shape[-1])
-            )
-            state["second_momentum_buffer"] = torch.zeros(state_shape, dtype=dtype, device=device)
-
-        red_dim = -1 if shape[-2] >= shape[-1] else -2
-
-        # Prepare output buffer for all_gather
-        updated_params = torch.empty(chunk_size, *shape, dtype=dtype, device=device)
-
-        if num_owned > 0:
-            owned_params = [params[start_idx + i] for i in range(num_owned)]
-            stacked_owned = torch.stack(owned_params)
-
-            # Fill 0-D tensors and run fused kernel
+            shape = getattr(p, "_orig_shape", p.shape)
+            ratio = max(1.0, shape[-2] / shape[-1]) ** 0.5 if len(shape) >= 2 else 1.0
             self._muon_momentum_t.fill_(group["momentum"])
-            self._muon_beta2_t.fill_(group["beta2"])
-            self._muon_lr_t.fill_(group["lr"] * max(1.0, shape[-2] / shape[-1]) ** 0.5)
+            self._muon_lr_t.fill_(group["lr"] * ratio)
             self._muon_wd_t.fill_(group["weight_decay"])
+            self._muon_beta2_t.fill_(group["beta2"])
 
             self._fused_muon(
-                grad_chunk[:num_owned],
-                stacked_owned,
-                state["momentum_buffer"][:num_owned],
-                state["second_momentum_buffer"][:num_owned],
+                grad_slice,
+                p_slice,
+                state["momentum_buffer"],
+                state["second_momentum_buffer"],
                 self._muon_momentum_t,
                 self._muon_lr_t,
                 self._muon_wd_t,
                 self._muon_beta2_t,
-                group["ns_steps"],
-                red_dim,
+                group.get("ns_steps", 5),
+                -1,
             )
-            updated_params[:num_owned].copy_(stacked_owned)
 
-        if num_owned < chunk_size:
-            updated_params[num_owned:].zero_()
-
-        stacked_params = info["stacked_grads"]
-        work = dist.all_gather_into_tensor(
-            stacked_params, updated_params, group=self.process_group, async_op=True
-        )
-        future = work.get_future() if work is not None else None  # type: ignore
-        gather_list.append({"future": future, "stacked_params": stacked_params, "params": params})
-
-    def _finish_gathers(self, gather_list: list) -> None:
-        for info in gather_list:
-            info["future"].wait()
-            if info["params"] is not None:
-                for p, src in zip(
-                    info["params"],
-                    info["stacked_params"][: len(info["params"])].unbind(0),
-                    strict=False,
-                ):
-                    p.copy_(src)
+            if isinstance(p, _ZeROParam):
+                p._sliced_grad = None
+                if p._ddp_level in (1, 2) and p._dp_size > 1:
+                    full_p = p.data.reshape(-1)
+                    if p._pad_size > 0:
+                        full_p = torch.nn.functional.pad(full_p, (0, p._pad_size))
+                    work = dist.all_gather_into_tensor(
+                        full_p, p_slice, group=p._dp_group, async_op=True
+                    )
+                    gather_list.append({"work": work, "p": p, "full_p": full_p})
 
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:  # type: ignore[override]
@@ -355,24 +300,21 @@ class DistMuonAdamW(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        rank = dist.get_rank(self.process_group)
-        world_size = dist.get_world_size(self.process_group)
-
-        reduce_infos = []
+        gather_list: list[dict[str, Any]] = []
         for group in self.param_groups:
             if group["kind"] == "adamw":
-                reduce_infos.append(self._reduce_adamw(group, world_size))
+                self._step_adamw(group, gather_list)
             elif group["kind"] == "muon":
-                reduce_infos.append(self._reduce_muon(group, world_size))
+                self._step_muon(group, gather_list)
             else:
                 raise ValueError(f"Unknown optimizer kind: {group['kind']}")
 
-        gather_list = []
-        for group, info in zip(self.param_groups, reduce_infos, strict=False):
-            if group["kind"] == "adamw":
-                self._compute_adamw(group, info, gather_list, rank, world_size)
-            elif group["kind"] == "muon":
-                self._compute_muon(group, info, gather_list, rank)
+        for item in gather_list:
+            if item.get("work") is not None:
+                item["work"].wait()
+            if "p" in item:
+                item["p"].data.copy_(
+                    item["full_p"][: item["p"]._orig_numel].view(item["p"]._orig_shape)
+                )
 
-        self._finish_gathers(gather_list)
         return loss
