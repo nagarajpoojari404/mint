@@ -46,9 +46,9 @@ class GroupedQueryAttention(nn.Module):
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
     ):
-        bsz, seqlen, _ = x.shape
-
-        q = self.wq(x).view(bsz, seqlen, self.n_heads, self.head_dim)
+        q = self.wq(x)
+        bsz, seqlen = q.shape[0], q.shape[1]
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
         k = self.wk(x).view(bsz, seqlen, self.n_kv_heads, self.head_dim)
         v = self.wv(x).view(bsz, seqlen, self.n_kv_heads, self.head_dim)
 
@@ -112,9 +112,9 @@ class MultiHeadAttention(nn.Module):
         base_attn_mask: torch.Tensor | None = None,
         doc_ids: torch.Tensor | None = None,
     ):
-        bsz, seqlen, _ = x.shape
-
-        q = self.wq(x).view(bsz, seqlen, self.n_heads, self.head_dim)
+        q = self.wq(x)
+        bsz, seqlen = q.shape[0], q.shape[1]
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
         k = self.wk(x).view(bsz, seqlen, self.n_heads, self.head_dim)
         v = self.wv(x).view(bsz, seqlen, self.n_heads, self.head_dim)
 
