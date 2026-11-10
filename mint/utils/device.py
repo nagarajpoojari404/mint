@@ -1,6 +1,5 @@
 import os
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import cast
 
 import torch
@@ -19,7 +18,13 @@ class _ShardedGradView:
 
     def __init__(self, optimizer: torch.optim.Optimizer, grads: list[torch.Tensor]) -> None:
         self._optimizer = optimizer
-        self.param_groups = [{"params": [SimpleNamespace(grad=g) for g in grads]}]
+        # GradScaler needs real tensors carrying `.grad`; alias each shard (no copy) as its own "param".
+        holders = []
+        for g in grads:
+            h = g.detach().view_as(g)
+            h.grad = g
+            holders.append(h)
+        self.param_groups = [{"params": holders}]
 
     def step(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
         return self._optimizer.step(*args, **kwargs)
