@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import cast
 
 import torch
@@ -10,7 +11,18 @@ from torch.amp.grad_scaler import GradScaler
 
 from mint.config.base import Config
 from mint.utils.logger import logger
-from mint.utils.parallel import ParallelContext, setup_parallel
+from mint.utils.parallel import ParallelContext, _ZeROParam, setup_parallel
+
+
+class _ShardedGradView:
+    """Optimizer-like view exposing sharded gradients as `.grad` for GradScaler."""
+
+    def __init__(self, optimizer: torch.optim.Optimizer, grads: list[torch.Tensor]) -> None:
+        self._optimizer = optimizer
+        self.param_groups = [{"params": [SimpleNamespace(grad=g) for g in grads]}]
+
+    def step(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        return self._optimizer.step(*args, **kwargs)
 
 
 @dataclass
@@ -137,12 +149,62 @@ class Device:
         else:
             loss.backward()
 
+    def _sharded_optimizer_step(
+        self,
+        optimizer: torch.optim.Optimizer,
+        zero_params: list[_ZeROParam],
+        grad_clip: float,
+    ) -> None:
+        # ZeRO-2/3 keep gradients in `_sliced_grad` (p.grad is None), so GradScaler and
+        # clip_grad_norm_ cannot see them. Expose the shards through a thin optimizer view.
+        grads = [p._sliced_grad for p in zero_params if p._sliced_grad is not None]
+        group = zero_params[0]._dp_group
+        sync = dist.is_available() and dist.is_initialized()
+        view = cast("torch.optim.Optimizer", _ShardedGradView(optimizer, grads))
+
+        if self.scaler.is_enabled():
+            self.scaler.unscale_(view)
+            if sync:
+                state = self.scaler._per_optimizer_states[id(view)]  # noqa: SLF001
+                for found_inf in state["found_inf_per_device"].values():
+                    dist.all_reduce(found_inf, op=dist.ReduceOp.MAX, group=group)
+
+        if grad_clip > 0 and grads:
+            sq_norm = torch.stack([torch.linalg.vector_norm(g.float()) for g in grads]).square().sum()
+            if sync:
+                dist.all_reduce(sq_norm, op=dist.ReduceOp.SUM, group=group)
+            coef = (grad_clip / (sq_norm.sqrt() + 1e-6)).clamp(max=1.0)
+            torch._foreach_mul_(grads, coef)  # noqa: SLF001
+
+        if self.scaler.is_enabled():
+            self.scaler.step(view)
+            self.scaler.update()
+        else:
+            optimizer.step()
+
+        # A skipped (inf) step leaves shards behind; never let them leak into the next step.
+        for p in zero_params:
+            p._sliced_grad = None
+
     def optimizer_step(
         self,
         optimizer: torch.optim.Optimizer,
         grad_clip: float = 0.0,
         params=None,  # noqa: ANN001
     ) -> None:
+        if params is not None:
+            params = list(params)
+            zero_params = list(
+                {
+                    id(p): p
+                    for p in params
+                    if isinstance(p, _ZeROParam) and p._ddp_level in (2, 3)  # noqa: SLF001
+                }.values()
+            )
+            if zero_params:
+                self._sharded_optimizer_step(optimizer, zero_params, grad_clip)
+                return
+
         if self.use_amp:
             if grad_clip > 0:
                 if params is None:
