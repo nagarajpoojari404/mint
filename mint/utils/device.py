@@ -101,6 +101,10 @@ class Device:
     def compile_model(self, model: nn.Module, *, enabled: bool = True) -> nn.Module:
         if not enabled or self.is_cpu:
             return model
+        if self.parallel.ddp_level == 3 and self.parallel.dp_size > 1:
+            # ZeRO-3 swaps `param.data` in module hooks; dynamo/AOTAutograd cannot compile those `set_` mutations.
+            logger.warning("Skipping torch.compile for the model: unsupported with ZeRO-3 param sharding")
+            return model
         try:
             if self.is_cuda:
                 logger.info("Compiling model with torch.compile...")
