@@ -85,6 +85,7 @@ adamw_eps = 1.0e-10
 
 [device]
 mixed_precision = true
+ddp_level = 2
 
 [dl]
 data_dir = "data/climbmix"
