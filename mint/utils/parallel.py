@@ -62,7 +62,7 @@ class ParallelContext:
                 dp_size=world_size,
                 ddp_level=ddp_level,
                 sp=sp,
-                dp_group=None,
+                dp_group=dist.group.WORLD if dist.is_initialized() else None,
             )
 
         dp_size = world_size // tp_size
