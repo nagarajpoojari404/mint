@@ -40,6 +40,7 @@ class DeviceConfig(Config):
 
 class Device:
     def __init__(self, config: DeviceConfig) -> None:
+        logger.info(f"[Device debug] env RANK={os.getenv('RANK')}, WORLD_SIZE={os.getenv('WORLD_SIZE')}, LOCAL_RANK={os.getenv('LOCAL_RANK')}")
         self._init_distributed()
         self.device = self._detect()
         self.type = self.device.type
@@ -48,6 +49,13 @@ class Device:
             ddp_level=config.ddp_level,
             sp=config.sp,
             device_type=self.type,
+        )
+        logger.info(
+            f"[Device debug] dist.is_initialized()={dist.is_initialized()} | "
+            f"parallel: rank={self.parallel.rank}, world_size={self.parallel.world_size}, "
+            f"dp_rank={self.parallel.dp_rank}, dp_size={self.parallel.dp_size}, "
+            f"tp_rank={self.parallel.tp_rank}, tp_size={self.parallel.tp_size}, "
+            f"ddp_level={self.parallel.ddp_level}, dp_group={self.parallel.dp_group is not None}"
         )
 
         self.is_cuda = self.type == "cuda"
@@ -64,11 +72,19 @@ class Device:
     @staticmethod
     def _init_distributed() -> None:
         # torchrun sets WORLD_SIZE/RANK/LOCAL_RANK; plain `python` runs stay single-process.
-        if int(os.getenv("WORLD_SIZE", "1")) <= 1 or dist.is_initialized():
+        world_size_env = int(os.getenv("WORLD_SIZE", "1"))
+        logger.info(f"[Device debug] _init_distributed check: world_size_env={world_size_env}, dist.is_initialized()={dist.is_initialized()}")
+        if world_size_env <= 1 or dist.is_initialized():
+            if world_size_env <= 1:
+                logger.warning("[Device debug] Skipping distributed init because WORLD_SIZE <= 1 (running single-process fallback)")
             return
         if torch.cuda.is_available():
-            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+            local_rank = int(os.environ["LOCAL_RANK"])
+            logger.info(f"[Device debug] Setting CUDA device to LOCAL_RANK={local_rank}")
+            torch.cuda.set_device(local_rank)
+        logger.info("[Device debug] Initializing process group...")
         dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
+        logger.info(f"[Device debug] Process group initialized. Rank={dist.get_rank()}, WorldSize={dist.get_world_size()}")
 
     def _detect(self) -> torch.device:
         if torch.cuda.is_available():

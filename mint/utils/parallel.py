@@ -9,6 +9,8 @@ import torch.distributed as dist
 from torch import nn
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
+from mint.utils.logger import logger
+
 
 def dp_tp_ranks(rank: int, tp_size: int) -> tuple[int, int]:
     return rank // tp_size, rank % tp_size
@@ -98,6 +100,11 @@ class _ZeROParam(nn.Parameter):
     _dp_size: int
     _ddp_level: int
 
+    _fallback_logged: bool = False
+    _communication_logged: bool = False
+    _grad_fallback_logged: bool = False
+    _grad_communication_logged: bool = False
+
     def __new__(
         cls,
         data: torch.Tensor | None = None,
@@ -152,6 +159,13 @@ class _ZeROParam(nn.Parameter):
         if not self._is_sharded:
             return None
         if self._dp_size == 1 or not (dist.is_available() and dist.is_initialized()):
+            if not _ZeROParam._fallback_logged:
+                _ZeROParam._fallback_logged = True
+                logger.warning(
+                    f"[ZeROParam debug] Fallback to local parameter copy detected! "
+                    f"dp_size={self._dp_size}, dist_initialized={dist.is_initialized()}. "
+                    f"No real NCCL communication is occurring!"
+                )
             if self._sliced_param is not None:
                 if self._sliced_param.numel() == self._orig_numel:
                     self.data = self._sliced_param.view(self._orig_shape)
@@ -162,6 +176,13 @@ class _ZeROParam(nn.Parameter):
 
         if self._sliced_param is None:
             return None
+
+        if not _ZeROParam._communication_logged:
+            _ZeROParam._communication_logged = True
+            logger.info(
+                f"[ZeROParam debug] Performing REAL NCCL all_gather_into_tensor communication! "
+                f"dp_size={self._dp_size}, group_is_none={self._dp_group is None}, async_op={async_op}"
+            )
 
         gathered = torch.empty(
             self._chunk_size * self._dp_size,
@@ -195,9 +216,23 @@ class _ZeROParam(nn.Parameter):
 
     def reduce_scatter_grad(self, grad: torch.Tensor, async_op: bool = False) -> Any:
         if self._dp_size == 1 or not (dist.is_available() and dist.is_initialized()):
+            if not _ZeROParam._grad_fallback_logged:
+                _ZeROParam._grad_fallback_logged = True
+                logger.warning(
+                    f"[ZeROParam debug] Fallback to local gradient copy detected! "
+                    f"dp_size={self._dp_size}, dist_initialized={dist.is_initialized()}. "
+                    f"No real NCCL communication is occurring!"
+                )
             g = grad.detach().reshape(-1)[: self._orig_numel].clone()
             self._sliced_grad = g if self._sliced_grad is None else self._sliced_grad + g
             return None
+
+        if not _ZeROParam._grad_communication_logged:
+            _ZeROParam._grad_communication_logged = True
+            logger.info(
+                f"[ZeROParam debug] Performing REAL NCCL reduce_scatter_tensor communication! "
+                f"dp_size={self._dp_size}, group_is_none={self._dp_group is None}, async_op={async_op}"
+            )
 
         flat_grad = grad.detach().reshape(-1)
         if self._pad_size > 0:
