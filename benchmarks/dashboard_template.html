@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mint parallelism benchmark</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--bd:#e3e5e8;--tx:#1f2328;--mu:#5c6570;--ac:#0f62fe}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif}
+header{background:#161616;color:#fff;padding:28px 32px}
+header h1{margin:0 0 4px;font-size:24px;font-weight:600}
+header p{margin:0;color:#c6c6c6}
+main{max-width:1280px;margin:0 auto;padding:20px 24px 48px}
+.controls{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0;display:flex;flex-wrap:wrap;gap:16px;align-items:center;border-bottom:1px solid var(--bd);margin-bottom:16px}
+.controls label{color:var(--mu);font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
+.seg button{border:1px solid var(--bd);background:var(--card);padding:5px 14px;cursor:pointer;font:inherit}
+.seg button:first-child{border-radius:4px 0 0 4px}.seg button:last-child{border-radius:0 4px 4px 0}
+.seg button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+select{font:inherit;padding:5px 8px;border:1px solid var(--bd);border-radius:4px;background:var(--card)}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(520px,1fr))}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:16px 18px;min-width:0}
+.card h2{margin:0 0 2px;font-size:15px}
+.card .desc{margin:0 0 10px;color:var(--mu);font-size:12.5px}
+.kpi .v{font-size:26px;font-weight:600;line-height:1.2}
+.kpi .l{color:var(--mu);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.kpi .s{color:var(--mu);font-size:12.5px}
+h3.sec{margin:26px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mu)}
+svg.chart{width:100%;height:auto;display:block}
+svg .gl{stroke:#e8eaed;stroke-width:1}
+svg .tick{fill:var(--mu);font-size:11px}
+svg .sub{fill:#8a929c;font-size:10px}
+svg .axl{fill:var(--mu);font-size:11px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:6px;font-size:12px;color:var(--mu)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--bd);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mu);font-weight:600;background:#fafbfc}
+table.heat td{text-align:center;border:2px solid #fff;font-variant-numeric:tabular-nums}
+table.heat th{background:none;border:0}
+.scroll{overflow-x:auto}
+ul.find{margin:0;padding-left:18px}ul.find li{margin:4px 0}
+pre{background:#161616;color:#e6e6e6;padding:12px;border-radius:4px;overflow:auto;font-size:11.5px;margin:8px 0 0}
+.env{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.env div span{display:block;color:var(--mu);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+.tag{display:inline-block;padding:1px 7px;border-radius:10px;background:#fff1f1;color:#da1e28;font-size:11.5px}
+#tip{position:fixed;pointer-events:none;background:#161616;color:#fff;padding:5px 9px;border-radius:4px;font-size:12px;display:none;z-index:10;max-width:320px}
+footer{text-align:center;color:var(--mu);font-size:12px;padding:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mint parallelism benchmark</h1>
+  <p id="sub"></p>
+</header>
+<main>
+  <h3 class="sec" style="margin-top:4px">Environment</h3>
+  <div class="card"><div class="env" id="env"></div></div>
+
+  <h3 class="sec">Headline numbers</h3>
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="controls">
+    <div><label>Micro-batch</label><span class="seg" id="mbSeg"></span></div>
+    <div><label>Model shape</label><select id="shapeSel"></select></div>
+    <span style="color:var(--mu);font-size:12px">Micro-batch applies to every chart; model shape applies to the per-shape charts (marked <b>◆</b>).</span>
+  </div>
+
+  <h3 class="sec">Throughput &amp; scaling</h3>
+  <div class="grid g2">
+    <div class="card"><h2>Global throughput by model size</h2><p class="desc">Tokens/s across all GPUs. Higher is better.</p><div id="c_tok"></div></div>
+    <div class="card"><h2>Scaling efficiency</h2><p class="desc">(tok/s ÷ single-GPU tok/s) ÷ GPU count. 100% = perfect linear scaling.</p><div id="c_scal"></div></div>
+    <div class="card"><h2>Speed-up vs 1 GPU</h2><p class="desc">Weak scaling for DDP/ZeRO; TP processes the same batch jointly.</p><div id="h_speed"></div></div>
+    <div class="card"><h2>Model FLOPs utilisation (MFU)</h2><p class="desc">Per-GPU TFLOPS ÷ 65 TFLOPS rated peak.</p><div id="h_mfu"></div></div>
+  </div>
+
+  <h3 class="sec">Memory</h3>
+  <div class="grid g2">
+    <div class="card"><h2>Peak allocated memory per GPU</h2><p class="desc">Max across ranks. Dashed line = T4 capacity.</p><div id="c_mem"></div></div>
+    <div class="card"><h2>◆ Memory composition</h2><p class="desc" id="d_memcomp"></p><div id="c_memcomp"></div></div>
+  </div>
+
+  <h3 class="sec">Where the time goes</h3>
+  <div class="grid g2">
+    <div class="card"><h2>◆ Kernel time breakdown</h2><p class="desc" id="d_kern"></p><div id="c_kern"></div></div>
+    <div class="card"><h2>Communication share vs scaling efficiency</h2><p class="desc">Each point is one multi-GPU run (both micro-batches). More NCCL time → lower efficiency.</p><div id="c_sc2"></div></div>
+    <div class="card"><h2>Memory vs throughput trade-off</h2><p class="desc">Every successful run. Up-and-left is better. Marker size ∝ model size.</p><div id="c_sc1"></div></div>
+    <div class="card"><h2>◆ GPU utilisation</h2><p class="desc" id="d_util"></p><div id="c_util"></div></div>
+    <div class="card"><h2>◆ Power draw</h2><p class="desc" id="d_pow"></p><div id="c_pow"></div></div>
+    <div class="card"><h2>◆ SM clock</h2><p class="desc" id="d_clk"></p><div id="c_clk"></div></div>
+  </div>
+
+  <h3 class="sec">Details</h3>
+  <div class="grid">
+    <div class="card"><h2>Key findings</h2><ul class="find" id="find"></ul></div>
+    <div class="card"><h2 id="t_title"></h2><div class="scroll" id="tbl"></div></div>
+    <div class="card"><h2>Interconnect topology</h2><pre id="topo"></pre></div>
+  </div>
+</main>
+<div id="tip"></div>
+<footer>Generated from results.csv / per_gpu.csv / results.json by build_dashboard.py · self-contained, no external assets</footer>
+<script>
+const D=/*__DATA__*/null;
+const R=D.records, META=D.meta;
+const MODES=[['single','1 GPU','#6f6f6f'],['ddp0','DDP (ZeRO-0)','#0f62fe'],['ddp1','ZeRO-1','#009d9a'],['ddp2','ZeRO-2','#8a3ffc'],['ddp3','ZeRO-3','#fa4d56'],['tp2','TP=2','#ff832b'],['tp2_sp','TP=2+SP','#b28600']];
+const MCOL=Object.fromEntries(MODES.map(m=>[m[0],m[2]])), MLAB=Object.fromEntries(MODES.map(m=>[m[0],m[1]]));
+const MULTI=MODES.filter(m=>m[0]!=='single');
+const shapes=[...new Set(R.map(r=>r.shape))].sort((a,b)=>get(a,null,'single').params_total-get(b,null,'single').params_total);
+const mbs=[...new Set(R.map(r=>r.mb))].sort((a,b)=>a-b);
+const st={mb:mbs[mbs.length-1],shape:shapes[shapes.length-2]||shapes[0]};
+function get(s,mb,m){return R.find(r=>r.shape===s&&(mb==null||r.mb===mb)&&r.mode===m)}
+const ok=r=>r&&r.status==='ok';
+const $=id=>document.getElementById(id);
+const f0=v=>Math.round(v).toLocaleString('en-US'), f1=v=>v.toFixed(1), f2=v=>v.toFixed(2);
+const fk=v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'k':String(Math.round(v));
+const pm=s=>(get(s,null,'single').params_total/1e6).toFixed(1)+'M';
+const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+function nice(max){const raw=max/5,p=Math.pow(10,Math.floor(Math.log10(raw))),n=raw/p,s=(n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p;const t=[];for(let v=0;v<=max+s*0.999;v+=s){t.push(+v.toPrecision(10));if(v>=max)break}return{top:t[t.length-1],ticks:t}}
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const W=620,H=320;
+function legend(items){return '<div class="legend">'+items.map(i=>`<span><i style="background:${i[1]}"></i>${i[0]}</span>`).join('')+'</div>'}
+function axes(m,iw,ih,ticks,top,fmt,ylab){let s='';ticks.forEach(t=>{const y=m.t+ih-ih*t/top;s+=`<line class="gl" x1="${m.l}" x2="${m.l+iw}" y1="${y}" y2="${y}"/><text class="tick" x="${m.l-6}" y="${y+4}" text-anchor="end">${fmt(t)}</text>`});if(ylab)s+=`<text class="axl" transform="translate(12 ${m.t+ih/2}) rotate(-90)" text-anchor="middle">${ylab}</text>`;return s}
+function groupBar(el,cats,series,o={}){
+  const m={l:o.ylab?64:54,r:12,t:14,b:cats.some(c=>c.sub)?44:28},iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const vals=series.flatMap(s=>s.vals.filter(v=>typeof v==='number'));
+  const {top,ticks}=nice(Math.max(...vals,o.ref||0,o.min||0)*1.04);
+  const fmt=o.fmt||f1;let s=axes(m,iw,ih,ticks,top,o.axfmt||fmt,o.ylab);
+  const gw=iw/cats.length,bw=gw*0.82/series.length;
+  cats.forEach((c,i)=>{const gx=m.l+gw*i+gw*0.09;
+    series.forEach((se,j)=>{const v=se.vals[i],x=gx+bw*j;
+      if(typeof v==='number'){const h=ih*v/top,col=se.colors?se.colors[i]:se.color;
+        s+=`<rect x="${x}" y="${m.t+ih-h}" width="${bw*0.92}" height="${h}" fill="${col}" rx="1" data-tip="${esc(c.label+' · '+se.name+': '+fmt(v)+(o.unit||''))}"/>`}
+      else if(v==='OOM')s+=`<text x="${x+bw*0.46}" y="${m.t+ih-6}" text-anchor="middle" fill="#da1e28" font-size="10" font-weight="600" transform="rotate(-90 ${x+bw*0.46} ${m.t+ih-6})">OOM</text>`});
+    s+=`<text class="tick" x="${gx+gw*0.41}" y="${m.t+ih+15}" text-anchor="middle">${esc(c.label)}</text>`;
+    if(c.sub)s+=`<text class="sub" x="${gx+gw*0.41}" y="${m.t+ih+28}" text-anchor="middle">${esc(c.sub)}</text>`});
+  if(o.ref){const y=m.t+ih-ih*o.ref/top;s+=`<line x1="${m.l}" x2="${m.l+iw}" y1="${y}" y2="${y}" stroke="#da1e28" stroke-dasharray="5 4"/><text class="tick" x="${m.l+iw}" y="${y-4}" text-anchor="end" fill="#da1e28" style="fill:#da1e28">${o.refLabel||''}</text>`}
+  s+=`<line x1="${m.l}" x2="${m.l+iw}" y1="${m.t+ih}" y2="${m.t+ih}" stroke="#9aa1a9"/>`;
+  $(el).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}">${s}</svg>`+(o.noLegend?'':legend(series.map(x=>[x.name,x.color])))}
+function stackBar(el,cats,series,o={}){
+  const m={l:o.ylab?64:54,r:12,t:14,b:28},iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const tot=cats.map((_,i)=>series.reduce((a,s)=>a+(s.vals[i]||0),0));
+  const {top,ticks}=nice(Math.max(...tot)*1.04),fmt=o.fmt||f1;let s=axes(m,iw,ih,ticks,top,o.axfmt||fmt,o.ylab);
+  const gw=iw/cats.length,bw=gw*0.64;
+  cats.forEach((c,i)=>{let y=m.t+ih;const x=m.l+gw*i+(gw-bw)/2;
+    if(cats[i].oom)s+=`<text x="${x+bw/2}" y="${y-6}" text-anchor="middle" fill="#da1e28" font-size="11" font-weight="600">OOM</text>`;
+    series.forEach(se=>{const v=se.vals[i];if(!v)return;const h=ih*v/top;y-=h;
+      s+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${se.color}" data-tip="${esc(c.label+' · '+se.name+': '+fmt(v)+(o.unit||''))}"/>`});
+    if(tot[i])s+=`<text class="tick" x="${x+bw/2}" y="${y-4}" text-anchor="middle" style="fill:#1f2328">${fmt(tot[i])}</text>`;
+    s+=`<text class="tick" x="${x+bw/2}" y="${m.t+ih+15}" text-anchor="middle">${esc(c.label)}</text>`});
+  s+=`<line x1="${m.l}" x2="${m.l+iw}" y1="${m.t+ih}" y2="${m.t+ih}" stroke="#9aa1a9"/>`;
+  $(el).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}">${s}</svg>`+legend(series.map(x=>[x.name,x.color]))}
+function scatter(el,pts,o){
+  const m={l:58,r:14,t:14,b:40},iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
+  const xn=nice(Math.max(...xs)*1.05),yn=nice(Math.max(...ys)*1.08);let s=axes(m,iw,ih,yn.ticks,yn.top,o.yfmt,o.ylab);
+  xn.ticks.forEach(t=>{const x=m.l+iw*t/xn.top;s+=`<line class="gl" y1="${m.t}" y2="${m.t+ih}" x1="${x}" x2="${x}"/><text class="tick" x="${x}" y="${m.t+ih+15}" text-anchor="middle">${o.xfmt(t)}</text>`});
+  s+=`<text class="axl" x="${m.l+iw/2}" y="${H-4}" text-anchor="middle">${o.xlab}</text>`;
+  pts.forEach(p=>{s+=`<circle cx="${m.l+iw*p.x/xn.top}" cy="${m.t+ih-ih*p.y/yn.top}" r="${p.r||5}" fill="${p.c}" fill-opacity=".72" stroke="#fff" data-tip="${esc(p.tip)}"/>`});
+  $(el).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}">${s}</svg>`+legend(o.legend)}
+function heat(el,metric,fmt,modes){
+  const vals=modes.flatMap(m=>shapes.map(s=>get(s,st.mb,m[0])?.[metric]).filter(v=>typeof v==='number'));
+  const lo=Math.min(...vals),hi=Math.max(...vals);
+  let h='<table class="heat"><tr><th></th>'+shapes.map(s=>`<th>${pm(s)}</th>`).join('')+'</tr>';
+  modes.forEach(m=>{h+=`<tr><th style="text-align:left;white-space:nowrap">${m[1]}</th>`;
+    shapes.forEach(s=>{const r=get(s,st.mb,m[0]),v=r?.[metric];
+      if(typeof v!=='number'){h+=`<td style="color:#da1e28">${r&&r.status==='OOM'?'OOM':'–'}</td>`;return}
+      const t=hi>lo?(v-lo)/(hi-lo):.5,c=`rgba(15,98,254,${(.08+.85*t).toFixed(2)})`;
+      h+=`<td style="background:${c};color:${t>.55?'#fff':'#1f2328'}" data-tip="${esc(m[1]+' · '+pm(s)+' params ('+s+'): '+fmt(v))}">${fmt(v)}</td>`});h+='</tr>'});
+  $(el).innerHTML=h+'</table>'}
+const cats=()=>shapes.map(s=>({label:pm(s),sub:s}));
+const modeSeries=(ms,key,fn)=>ms.map(m=>({name:m[1],color:m[2],vals:shapes.map(s=>{const r=get(s,st.mb,m[0]);return ok(r)?(fn?fn(r):r[key]):(r&&r.status==='OOM'?'OOM':null)})}));
+function render(){
+  const mb=st.mb,sh=st.shape,tag=`mb=${mb}`,sp=`${pm(sh)} params · mb=${mb}`;
+  groupBar('c_tok',cats(),modeSeries(MODES,'tok_s'),{fmt:fk,unit:' tok/s',ylab:'tokens / s'});
+  groupBar('c_scal',cats(),modeSeries(MULTI,'scaling_eff',r=>r.scaling_eff*100),{fmt:v=>f0(v)+'%',ref:100,refLabel:'linear',min:100,ylab:'efficiency'});
+  heat('h_speed','speedup',v=>f2(v)+'×',MODES);
+  heat('h_mfu','mfu',v=>f1(v*100)+'%',MODES);
+  groupBar('c_mem',cats(),modeSeries(MODES,'peak_alloc_gb'),{fmt:f2,unit:' GB',ylab:'GB',ref:META.gpus[0]['memory.total']*1048576/1e9,refLabel:'T4 capacity (15 GiB)'});
+  const mc=MODES.map(m=>{const r=get(sh,mb,m[0]);return {label:m[1],oom:r&&r.status==='OOM',r}});
+  const pick=fn=>mc.map(c=>ok(c.r)?fn(c.r):0);
+  $('d_memcomp').textContent=`${sp}. Peak allocated memory split into persistent state and transient (activations, gradients, comm buffers).`;
+  stackBar('c_memcomp',mc,[
+    {name:'Parameters',color:'#0f62fe',vals:pick(r=>r.param_gb)},
+    {name:'Optimizer state',color:'#8a3ffc',vals:pick(r=>r.optstate_gb)},
+    {name:'Other static',color:'#9ec5fe',vals:pick(r=>Math.max(0,r.static_gb-r.param_gb-r.optstate_gb))},
+    {name:'Transient peak',color:'#ffb784',vals:pick(r=>r.peak_alloc_gb-r.static_gb)}],{fmt:f2,unit:' GB',ylab:'GB'});
+  $('d_kern').textContent=`${sp}. Share of profiled GPU time by kernel class (NCCL may overlap compute).`;
+  stackBar('c_kern',mc,[
+    {name:'Matmul',color:'#0f62fe',vals:pick(r=>r.matmul)},{name:'Attention',color:'#009d9a',vals:pick(r=>r.attention)},
+    {name:'NCCL comm',color:'#fa4d56',vals:pick(r=>r.comm)},{name:'Memcpy',color:'#b28600',vals:pick(r=>r.memcpy)},
+    {name:'Other',color:'#c6c6c6',vals:pick(r=>r.other)}],{fmt:f0,unit:'%',ylab:'% of kernel time'});
+  const one=(id,d,key,unit,ylab,fmt,txt)=>{$(d).textContent=`${sp}. ${txt}`;
+    groupBar(id,mc.map(c=>({label:c.label})),[{name:ylab,colors:MODES.map(m=>m[2]),vals:pick(r=>r[key])}],{fmt,unit,ylab,noLegend:true})};
+  one('c_util','d_util','util','%','% busy',f0,'Share of time any kernel is running (nvidia-smi, mean over GPUs) — not SM occupancy.');
+  one('c_pow','d_pow','power',' W','watts',f0,'Mean board power (T4 TDP is 70 W) — compute-bound runs sit closest to the limit.');
+  one('c_clk','d_clk','sm_clock',' MHz','MHz',f0,'Mean SM clock; low values indicate power/thermal throttling.');
+  scatter('c_sc2',R.filter(r=>ok(r)&&r.world>1&&r.comm!=null).map(r=>({x:r.comm,y:r.scaling_eff*100,c:MCOL[r.mode],r:4+3*Math.sqrt(r.params_total/1.425e8),
+    tip:`${MLAB[r.mode]} · ${pm(r.shape)} · mb=${r.mb}: NCCL ${f0(r.comm)}%, efficiency ${f0(r.scaling_eff*100)}%`})),
+    {xlab:'NCCL share of kernel time (%)',ylab:'scaling efficiency (%)',xfmt:f0,yfmt:f0,legend:MULTI.map(m=>[m[1],m[2]])});
+  scatter('c_sc1',R.filter(r=>ok(r)&&r.mb===mb).map(r=>({x:r.peak_alloc_gb,y:r.mfu*100,c:MCOL[r.mode],r:4+7*Math.sqrt(r.params_total/1.425e8),
+    tip:`${MLAB[r.mode]} · ${pm(r.shape)} · mb=${r.mb}: ${f2(r.peak_alloc_gb)} GB, MFU ${f1(r.mfu*100)}%`})),
+    {xlab:'peak allocated memory per GPU (GB)',ylab:'MFU (%)',xfmt:f0,yfmt:f0,legend:MODES.map(m=>[m[1],m[2]])});
+  $('t_title').textContent=`Details · ${sh} · ${sp}`;
+  const cols=[['Mode',r=>MLAB[r.mode]+(r.compiled===false?' <span class="tag">eager</span>':'')],['GPUs',r=>r.world],['Step ms',r=>f0(r.ms_step)],['tok/s',r=>f0(r.tok_s)],['TFLOPS',r=>f2(r.tflops)],['MFU',r=>f1(r.mfu*100)+'%'],['Speed-up',r=>f2(r.speedup)+'×'],['Scaling',r=>f0(r.scaling_eff*100)+'%'],['Peak GB',r=>f2(r.peak_alloc_gb)],['GPU util',r=>f0(r.util)+'%'],['Power W',r=>f0(r.power)],['NCCL',r=>f0(r.comm)+'%']];
+  $('tbl').innerHTML='<table><tr>'+cols.map(c=>`<th>${c[0]}</th>`).join('')+'</tr>'+MODES.map(m=>{const r=get(sh,mb,m[0]);
+    if(!r)return'';if(!ok(r))return`<tr><td>${MLAB[m[0]]}</td><td colspan="${cols.length-1}" style="text-align:left;color:#da1e28">${r.status}: ${r.note||''}</td></tr>`;
+    return'<tr>'+cols.map(c=>`<td>${c[1](r)}</td>`).join('')+'</tr>'}).join('')+'</table>'}
+function findings(){
+  const cells=[];shapes.forEach(s=>mbs.forEach(mb=>cells.push([s,mb])));
+  const avg=fn=>mean(cells.map(([s,mb])=>fn(s,mb)).filter(v=>v!=null&&isFinite(v)));
+  const g=(s,mb,m)=>get(s,mb,m);
+  const peakRatio=m=>avg((s,mb)=>ok(g(s,mb,m))?g(s,mb,m).peak_alloc_gb/g(s,mb,'ddp0').peak_alloc_gb:null);
+  const best=(s,mb,ms)=>Math.max(...ms.map(m=>ok(g(s,mb,m))?g(s,mb,m).tok_s:0));
+  const dpwin=cells.filter(([s,mb])=>best(s,mb,['ddp0','ddp1','ddp2','ddp3'])>best(s,mb,['tp2','tp2_sp'])).length;
+  const bestMfu=R.filter(ok).reduce((a,b)=>b.mfu>a.mfu?b:a);
+  const ddp=R.filter(r=>ok(r)&&r.mode==='ddp0');
+  const oom=R.filter(r=>r.status==='OOM');
+  const L=[
+   `<b>DDP wins throughput</b> in ${dpwin}/${cells.length} cells; it scales ${f0(Math.min(...ddp.map(r=>r.scaling_eff))*100)}–${f0(Math.max(...ddp.map(r=>r.scaling_eff))*100)}% efficiently over the PCIe-only (PHB) link, better at larger micro-batch.`,
+   `Best data-parallel mode is <b>${f2(avg((s,mb)=>best(s,mb,['ddp0','ddp1','ddp2','ddp3'])/best(s,mb,['tp2','tp2_sp'])))}×</b> the best tensor-parallel mode in tok/s on average.`,
+   `ZeRO-1 / ZeRO-2 peak memory is <b>${f2(peakRatio('ddp1'))}× / ${f2(peakRatio('ddp2'))}×</b> of DDP-0 — optimizer state is tiny for these models, so savings are small — while costing ${f0((1-avg((s,mb)=>g(s,mb,'ddp1').tok_s/g(s,mb,'ddp0').tok_s))*100)}% / ${f0((1-avg((s,mb)=>g(s,mb,'ddp2').tok_s/g(s,mb,'ddp0').tok_s))*100)}% throughput.`,
+   `ZeRO-3 uses <b>${f2(peakRatio('ddp3'))}×</b> DDP-0 peak memory, runs eager rather than compiled, and is the slowest DP mode${oom.length?'; it ran out of memory on '+oom.map(r=>`${pm(r.shape)} mb=${r.mb}`).join(', '):''}.`,
+   `Tensor parallelism cuts peak memory by <b>${f0((1-peakRatio('tp2'))*100)}%</b> (TP) and <b>${f0((1-peakRatio('tp2_sp'))*100)}%</b> (TP+SP) vs DDP-0, but adding sequence parallelism changes TP throughput to <b>${f2(avg((s,mb)=>g(s,mb,'tp2_sp').tok_s/g(s,mb,'tp2').tok_s))}×</b>; NCCL then takes over half of kernel time.`,
+   `Peak utilisation is <b>${f1(bestMfu.mfu*100)}% MFU</b> (${MLAB[bestMfu.mode]}, ${pm(bestMfu.shape)}, mb=${bestMfu.mb}); larger models and batches amortise launch and communication overhead.`];
+  $('find').innerHTML=L.map(x=>`<li>${x}</li>`).join('')}
+function kpis(){
+  const ddp=R.filter(r=>ok(r)&&r.mode==='ddp0'),bestMfu=R.filter(ok).reduce((a,b)=>b.mfu>a.mfu?b:a),bestTok=R.filter(ok).reduce((a,b)=>b.tok_s>a.tok_s?b:a),bestSp=ddp.reduce((a,b)=>b.speedup>a.speedup?b:a);
+  const k=[['Runs',R.length,`${R.filter(ok).length} ok · ${R.filter(r=>r.status==='OOM').length} OOM`],
+    ['Peak throughput',f0(bestTok.tok_s)+' tok/s',`${MLAB[bestTok.mode]} · ${pm(bestTok.shape)} · mb=${bestTok.mb}`],
+    ['Best DDP speed-up',f2(bestSp.speedup)+'×',`on ${META.n_gpus} GPUs · ${pm(bestSp.shape)} · mb=${bestSp.mb}`],
+    ['Peak MFU',f1(bestMfu.mfu*100)+'%',`${MLAB[bestMfu.mode]} · ${pm(bestMfu.shape)} · mb=${bestMfu.mb}`],
+    ['Model sizes',pm(shapes[0])+' – '+pm(shapes[shapes.length-1]),`${shapes.length} shapes · ${mbs.length} micro-batches`]];
+  $('kpis').innerHTML=k.map(x=>`<div class="card kpi"><div class="l">${x[0]}</div><div class="v">${x[1]}</div><div class="s">${x[2]}</div></div>`).join('')}
+function init(){
+  const g=META.gpus;$('sub').textContent=`${META.n_gpus} × ${g[0].name} · PyTorch ${META.torch} · seq len ${META.seq_len} · ${META.started}`;
+  const e=[['GPUs',`${META.n_gpus} × ${g[0].name}`],['GPU memory',(g[0]['memory.total']/1024).toFixed(0)+' GiB each'],['Driver / CC',`${g[0].driver_version} / ${g[0].compute_cap}`],['PyTorch / CUDA',`${META.torch} / ${META.cuda}`],['Autocast',META.amp_dtype],['MFU peak',META.peak_tflops+' TFLOPS / GPU'],['Seq length',META.seq_len],['Steps / warmup',`${META.steps} / ${META.warmup}`],['Host',META.host]];
+  $('env').innerHTML=e.map(x=>`<div><span>${x[0]}</span>${x[1]}</div>`).join('');$('topo').textContent=META.topology;
+  $('mbSeg').innerHTML=mbs.map(m=>`<button data-mb="${m}">${m}</button>`).join('');
+  $('mbSeg').onclick=e=>{const b=e.target.closest('button');if(!b)return;st.mb=+b.dataset.mb;sync()};
+  $('shapeSel').innerHTML=shapes.map(s=>`<option value="${s}">${pm(s)} · ${s}</option>`).join('');$('shapeSel').onchange=e=>{st.shape=e.target.value;sync()};
+  kpis();findings();sync()}
+function sync(){document.querySelectorAll('#mbSeg button').forEach(b=>b.classList.toggle('on',+b.dataset.mb===st.mb));$('shapeSel').value=st.shape;render()}
+const tip=$('tip');
+document.addEventListener('mousemove',e=>{const t=e.target.closest('[data-tip]');if(!t){tip.style.display='none';return}
+  tip.textContent=t.dataset.tip;tip.style.display='block';tip.style.left=Math.min(e.clientX+14,innerWidth-340)+'px';tip.style.top=(e.clientY+14)+'px'});
+init();
+</script>
+</body>
+</html>
